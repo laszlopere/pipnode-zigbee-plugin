@@ -1,0 +1,39 @@
+# Autotools generated files
+/autom4te.cache/
+/build-aux/
+/m4/libtool.m4
+/m4/lt*.m4
+aclocal.m4
+configure
+configure~
+config.log
+config.status
+config.guess
+config.sub
+compile
+depcomp
+install-sh
+ltmain.sh
+libtool
+missing
+stamp-h1
+Makefile
+Makefile.in
+.deps/
+.libs/
+*.lo
+*.la
+*.o
+*.so
+
+# make dist / distcheck output
+/*.tar.gz
+/pipnode-zigbee-plugin-*/
+
+# clangd / tooling
+/compile_commands.json
+.cache/
+
+# editor swap / backup files
+*.swp
+*.swo

@@ -1,0 +1,44 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnZnpPing",
+      "uuid" : "5d28cc2f-1fbd-43fb-be8c-32490574baff",
+      "name" : "ZNP Ping 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 120.0,
+        "y" : 100.0
+      },
+      "properties" : {
+        "device" : "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+        "interval" : 5
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "28a38f9e-624e-4eff-bee8-d4116d6f502f",
+      "name" : "Debug Print 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 320.0,
+        "y" : 100.0
+      },
+      "properties" : {
+        "target" : "Standard Output",
+        "format" : "JSON"
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "5d28cc2f-1fbd-43fb-be8c-32490574baff",
+      "target_id" : "28a38f9e-624e-4eff-bee8-d4116d6f502f"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}
