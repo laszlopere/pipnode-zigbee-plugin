@@ -8,11 +8,11 @@
       "name" : "Debug Print",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 260.0,
+        "x" : 500.0,
         "y" : 200.0
       },
       "properties" : {
-        "target" : "Standard Output",
+        "target" : "Debug View",
         "format" : "JSON"
       }
     },
@@ -26,7 +26,7 @@
         "y" : 120.0
       },
       "properties" : {
-        "on" : true,
+        "on" : false,
         "friendly-name" : "0xa4c138a4c9626802",
         "enforce-on-startup" : true
       }
@@ -54,7 +54,7 @@
     {
       "type" : "PnZigbeeSource",
       "uuid" : "7620c3ce-49cf-4c6e-a29d-c273ffe6cafa",
-      "name" : "MQTT Source 1",
+      "name" : "Zigbee Source 1",
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 60.0,
@@ -67,7 +67,9 @@
         "username" : "",
         "client-id" : "",
         "qos" : 0,
-        "filter-logging" : true
+        "filter-logging" : true,
+        "inject-device-info" : false,
+        "inject-device-capabilities" : false
       }
     }
   ],
@@ -79,6 +81,10 @@
     {
       "source_id" : "7620c3ce-49cf-4c6e-a29d-c273ffe6cafa",
       "target_id" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031"
+    },
+    {
+      "source_id" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031",
+      "target_id" : "ae957f56-fca6-4efb-8857-efef3f867c83"
     },
     {
       "source_id" : "7620c3ce-49cf-4c6e-a29d-c273ffe6cafa",

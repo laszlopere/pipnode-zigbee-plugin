@@ -36,7 +36,30 @@ G_BEGIN_DECLS
 /*      filter is gated by the boolean #PnZigbeeSource:filter-logging  */
 /*      property, default %TRUE.                                       */
 /*                                                                     */
-/*  The remaining `bridge/...` topics (event, state, devices, groups,  */
+/*    * An #PnMqttClass::process_message override that watches         */
+/*      `zigbee2mqtt/bridge/devices` (Z2M's retained device-inventory  */
+/*      publish, delivered automatically on each fresh subscribe)     */
+/*      and caches a per-friendly-name device-info record in memory.   */
+/*      Subsequent per-device state publishes get a `device` object   */
+/*      grafted onto `data.payload` -- two opt-ins:                   */
+/*                                                                     */
+/*        - #PnZigbeeSource:inject-device-info (default %TRUE) emits   */
+/*          the small Z2M `include_device_information`-shaped block   */
+/*          (friendlyName / ieeeAddr / type / manufacturerName / ...). */
+/*                                                                     */
+/*        - #PnZigbeeSource:inject-device-capabilities (default       */
+/*          %FALSE) extends the block with a synthesised category, a  */
+/*          human-readable description / vendor / supportsOta, and    */
+/*          the structured `exposes` + `options` trees from Z2M's     */
+/*          definition.  Off by default because those trees can run   */
+/*          to several KB per device.                                  */
+/*                                                                     */
+/*      The decoration is produced client-side from the cache, so no  */
+/*      Z2M configuration change is needed and Z2M does not pay the    */
+/*      per-publish bandwidth cost it would if it had been told to    */
+/*      emit `include_device_information` upstream.                    */
+/*                                                                     */
+/*  The remaining `bridge/...` topics (event, state, groups,           */
 /*  definitions, response/...) carry useful structured data and are   */
 /*  always passed through; users who want a stricter cut can narrow   */
 /*  the subscribe filter directly.                                    */

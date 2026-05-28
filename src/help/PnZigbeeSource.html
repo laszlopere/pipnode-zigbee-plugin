@@ -29,6 +29,14 @@ the base unchanged.  Two specialisations on top:
       <em>before</em> a <code>PnMessage</code> is built &mdash; cheap
       noise rejection that skips the JSON parse / message build /
       main-thread marshal cost.</li>
+  <li>A late message hook (<code>PnMqttClass::process_message</code>
+      override) caches the device inventory Z2M publishes on
+      <code>zigbee2mqtt/bridge/devices</code> and grafts a
+      <code>device</code> object onto every per-device state
+      publish's <code>data.payload</code> &mdash; the same shape Z2M
+      emits when configured with
+      <code>include_device_information: true</code>, but produced
+      client-side at no Z2M / network cost.</li>
 </ul>
 
 <h5>Why filter logging?</h5>
@@ -53,6 +61,122 @@ who want a stricter cut can narrow the subscribe-filter directly
 <code>bridge/</code> subtree).
 </p>
 
+<h5>Device-info injection</h5>
+<p>
+Z2M publishes its full device inventory on
+<code>zigbee2mqtt/bridge/devices</code> with the retained flag, so a
+fresh subscriber receives it automatically on connect and again
+whenever the device set changes.  The node parses each such publish
+into an in-memory cache keyed by <code>friendly_name</code>.  On
+every subsequent per-device state publish
+(<code>zigbee2mqtt/&lt;friendly_name&gt;</code>) the cached record
+is spliced into <code>data.payload</code> under the key
+<code>device</code>.
+</p>
+<p>
+Two <strong>independent</strong> opt-ins each contribute their own
+non-overlapping set of fields to the <code>device</code> object.
+Each can be on or off on its own &mdash; turn off everything you
+don't need so the important things stay easy to find:
+</p>
+<table>
+  <tr><th><code>info</code></th><th><code>caps</code></th>
+      <th>What lands under <code>data.payload.device</code></th></tr>
+  <tr><td>off</td><td>off</td>
+      <td><em>nothing</em> &mdash; no <code>device</code> member is
+          added at all.</td></tr>
+  <tr><td>on</td><td>off</td>
+      <td>Z2M-compatible identity block only.</td></tr>
+  <tr><td>off</td><td>on</td>
+      <td>Capability / category / description block only &mdash;
+          the publish's envelope topic already names the device, so
+          omitting the identity scalars is fine.</td></tr>
+  <tr><td>on</td><td>on</td>
+      <td>Union of both, identity fields first.</td></tr>
+</table>
+
+<h6>Identity block &mdash; <code>inject-device-info</code> (default on)</h6>
+<p>
+Matches Z2M's <code>include_device_information</code> output
+verbatim, so a downstream consumer written against that Z2M shape
+works unchanged:
+</p>
+<pre>{
+  "state": "ON",
+  "power": 0,
+  "voltage": 239,
+  ...
+  "device": {
+    "friendlyName":     "0xa4c138a4c9626802",
+    "ieeeAddr":         "0xa4c138a4c9626802",
+    "networkAddress":   34662,
+    "type":             "Router",
+    "powerSource":      "Mains (single phase)",
+    "manufacturerName": "_TZ3000_okaz9tjs",
+    "modelID":          "TS011F",
+    "model":            "TS011F_plug_1",
+    "softwareBuildID":  "1.0.5"
+  }
+}</pre>
+<p>
+Fields that are <em>not</em> in <code>bridge/devices</code>
+(<code>applicationVersion</code>, <code>stackVersion</code>,
+<code>zclVersion</code>, <code>hardwareVersion</code>,
+<code>manufacturerID</code> &mdash; Z2M sources these from its
+in-process <code>zigbee-herdsman</code> device object) are omitted.
+</p>
+
+<h6>Capability block &mdash;
+<code>inject-device-capabilities</code> (default off)</h6>
+<p>
+A separate field set lifted from Z2M's
+<code>bridge/devices</code> <code>definition</code> sub-object, so
+a downstream reader can answer &ldquo;what is this, what can it
+do, what can I configure&rdquo; from one place.  When enabled with
+identity off, the spliced <code>device</code> object contains
+<em>only</em> these keys (the publish's envelope topic already
+identifies the device):
+</p>
+<pre>"device": {
+  "category":     "plug",
+  "description":  "Smart plug (with power monitoring)",
+  "vendor":       "TuYa",
+  "supportsOta":  false,
+  "exposes":      [ ...full capability tree, verbatim... ],
+  "options":      [ ...Z2M device-config options, verbatim... ]
+}</pre>
+<ul>
+  <li><code>category</code> &mdash; best-effort one-word label
+      synthesised from the exposes tree and power source.  Possible
+      values: <code>plug</code> (mains-powered switch),
+      <code>switch</code>, <code>light</code>, <code>lock</code>,
+      <code>cover</code>, <code>fan</code>, <code>climate</code>,
+      <code>remote</code> (exposes a top-level
+      <code>action</code>), <code>sensor</code> (all exposes are
+      read-only), or the fallback <code>device</code>.</li>
+  <li><code>description</code> / <code>vendor</code> /
+      <code>supportsOta</code> &mdash; Z2M's human-readable
+      definition fields lifted up to the device block.</li>
+  <li><code>exposes</code> &mdash; the structured capability tree
+      verbatim from <code>definition.exposes</code>: per-feature
+      <code>access</code> bitmap (1=published, 2=settable,
+      4=gettable), value ranges, enum value lists, units, labels.
+      This is what answers &ldquo;what commands can I send&rdquo;
+      and &ldquo;what does this device report&rdquo;.</li>
+  <li><code>options</code> &mdash; the Z2M-side device-configuration
+      knobs verbatim from <code>definition.options</code>.</li>
+</ul>
+<p>
+<strong>Default off</strong> because the <code>exposes</code> and
+<code>options</code> trees can run several KB per device, making
+each state publish proportionally bigger.  Enable when a downstream
+node actually needs to introspect device commands / configuration.
+Both field sets are precomputed (as disjoint cache objects) when
+<code>bridge/devices</code> arrives, so toggling either property at
+runtime takes effect on the next per-device publish without
+rebuilding the cache.
+</p>
+
 <h5>Configuration</h5>
 <table>
   <tr><th>Property</th><th>Description</th></tr>
@@ -62,6 +186,23 @@ who want a stricter cut can narrow the subscribe-filter directly
           a <code>PnMessage</code> is built.  Set FALSE to forward
           those log envelopes too &mdash; useful when piping Z2M logs
           into a Debug node or an external aggregator.</td></tr>
+  <tr><td><code>inject-device-info</code></td>
+      <td>When TRUE (default), add the Z2M
+          <code>include_device_information</code> identity scalars
+          (friendlyName, ieeeAddr, etc.) to the
+          <code>device</code> block of every matching per-device
+          state publish.  Independent of
+          <code>inject-device-capabilities</code>.</td></tr>
+  <tr><td><code>inject-device-capabilities</code></td>
+      <td>When TRUE, add <code>category</code>,
+          <code>description</code>, <code>vendor</code>,
+          <code>supportsOta</code> and the full
+          <code>exposes</code> / <code>options</code> trees to the
+          <code>device</code> block.  Default FALSE because the
+          exposes / options trees can run several KB per device.
+          Independent of <code>inject-device-info</code>: turn off
+          info and leave this on to get a focused capability
+          descriptor with no duplicated identity scalars.</td></tr>
   <tr><td><code>subscribe-topic</code></td>
       <td>Inherited from <em>MQTT Source</em>.  Default
           <code>zigbee2mqtt/#</code>; honours the standard MQTT
