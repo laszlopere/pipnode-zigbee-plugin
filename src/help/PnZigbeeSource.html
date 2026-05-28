@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Source (PnZigbeeSource) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeSource">Zigbee Source</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeSource</code>.
+</p>
+<p>
+A Zigbee2MQTT-flavoured <em>MQTT Source</em>.  Subclass of
+<em>MQTT Source</em> (<code>PnMqtt</code>); the broker
+connect / subscribe / reconnect / visual-state machinery comes from
+the base unchanged.  Two specialisations on top:
+</p>
+<ul>
+  <li>The inherited <code>subscribe-topic</code> defaults to
+      <code>zigbee2mqtt/#</code>, so a freshly-dropped node already
+      points at the Z2M topic tree.</li>
+  <li>An early topic filter (<code>PnMqttClass::accept_topic</code>
+      override) optionally drops
+      <code>zigbee2mqtt/bridge/logging</code> on the network thread
+      <em>before</em> a <code>PnMessage</code> is built &mdash; cheap
+      noise rejection that skips the JSON parse / message build /
+      main-thread marshal cost.</li>
+</ul>
+
+<h5>Why filter logging?</h5>
+<p>
+Zigbee2MQTT publishes its own log lines to
+<code>zigbee2mqtt/bridge/logging</code> as
+<code>{"level":"info|warning|error","message":"..."}</code>.  That
+channel is what the Z2M web UI's <strong>Logs</strong> tab consumes;
+useful there, pure noise in a worksheet that only cares about device
+traffic and lifecycle events.  Filtering it out at the source keeps
+downstream nodes' Debug panes and graphs readable without changing
+the subscribe filter.
+</p>
+<p>
+The other <code>bridge/...</code> topics (<code>event</code>,
+<code>state</code>, <code>devices</code>, <code>groups</code>,
+<code>definitions</code>, <code>response/...</code>) carry structured
+data &mdash; device join / leave events, online / offline, retained
+inventories, RPC responses &mdash; and always pass through.  Users
+who want a stricter cut can narrow the subscribe-filter directly
+(e.g.&nbsp;<code>zigbee2mqtt/+</code>, which excludes the whole
+<code>bridge/</code> subtree).
+</p>
+
+<h5>Configuration</h5>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>filter-logging</code></td>
+      <td>When TRUE (default), publishes on
+          <code>zigbee2mqtt/bridge/logging</code> are dropped before
+          a <code>PnMessage</code> is built.  Set FALSE to forward
+          those log envelopes too &mdash; useful when piping Z2M logs
+          into a Debug node or an external aggregator.</td></tr>
+  <tr><td><code>subscribe-topic</code></td>
+      <td>Inherited from <em>MQTT Source</em>.  Default
+          <code>zigbee2mqtt/#</code>; honours the standard MQTT
+          wildcards.</td></tr>
+  <tr><td><code>url</code> / <code>username</code> /
+          <code>password</code> / <code>client-id</code> /
+          <code>qos</code> / <code>broker-profile</code></td>
+      <td>Inherited from <em>MQTT Source</em>; same semantics.</td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>Zigbee Source (url = tcp://mqtt.homelab.local:1883)
+    &rarr; Debug Print (target = Debug View, format = JSON)</pre>
+<p>
+Drop the node, point it at the broker, run.  The Debug pane fills
+with device state publishes
+(<code>zigbee2mqtt/&lt;friendly_name&gt;</code>) and bridge lifecycle
+events (<code>zigbee2mqtt/bridge/event</code>,
+<code>.../state</code>, ...) but stays free of the per-line log
+chatter from <code>zigbee2mqtt/bridge/logging</code>.
+</p>
+
+<h5>Relationship to MQTT Source</h5>
+<p>
+Drop a plain <a href="PnMqtt.html"><em>MQTT Source</em></a> instead
+when you need to subscribe outside the Z2M tree, or when you want
+explicit control over every topic the node forwards.  Use
+<em>Zigbee Source</em> for the common case of "give me Zigbee
+traffic, hide the log spam".
+</p>
+
+</body>
+</html>

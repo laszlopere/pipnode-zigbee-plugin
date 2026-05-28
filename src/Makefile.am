@@ -12,6 +12,8 @@ plugin_LTLIBRARIES = pipnode_zigbee.la
 
 pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-plugin.c \
+	pn-zigbee-source.c \
+	pn-zigbee-source.h \
 	pn-zigbee-switch.c \
 	pn-zigbee-switch.h \
 	pn-znp-ping.c \
@@ -25,6 +27,7 @@ pipnode_zigbee_la_LIBADD  = $(PIPNODE_LIBS)
 # scans ($(PIPNODE_HELPDIR), from pipnode-core.pc).
 pnhelpdir   = $(PIPNODE_HELPDIR)
 pnhelp_DATA = \
+	help/PnZigbeeSource.html \
 	help/PnZigbeeSwitch.html \
 	help/PnZnpPing.html
 EXTRA_DIST  = $(pnhelp_DATA)
