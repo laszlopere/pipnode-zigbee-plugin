@@ -39,26 +39,64 @@ the base unchanged.  Two specialisations on top:
       client-side at no Z2M / network cost.</li>
 </ul>
 
-<h5>Why filter logging?</h5>
+<h5>Filtering noisy bridge topics</h5>
 <p>
-Zigbee2MQTT publishes its own log lines to
-<code>zigbee2mqtt/bridge/logging</code> as
-<code>{"level":"info|warning|error","message":"..."}</code>.  That
-channel is what the Z2M web UI's <strong>Logs</strong> tab consumes;
-useful there, pure noise in a worksheet that only cares about device
-traffic and lifecycle events.  Filtering it out at the source keeps
-downstream nodes' Debug panes and graphs readable without changing
-the subscribe filter.
+Four <code>bridge/...</code> topics are routinely huge or
+high-frequency and clutter the worksheet's Debug panes without
+adding signal.  Each has its own opt-out flag (all default
+<strong>on</strong>); the flags are independent so you can keep
+exactly the envelopes you want:
+</p>
+<table>
+  <tr><th>Topic</th><th>Property</th><th>Filter point</th>
+      <th>Why filtered by default</th></tr>
+  <tr><td><code>bridge/logging</code></td>
+      <td><code>filter-logging</code></td>
+      <td>Early (<code>accept_topic</code>, network thread)</td>
+      <td>Per-line Z2M log mirror &mdash; the channel the Z2M web
+          UI's <strong>Logs</strong> tab consumes.  Dropped before
+          the <code>PnMessage</code> is even built; the node never
+          needs to look at it.</td></tr>
+  <tr><td><code>bridge/devices</code></td>
+      <td><code>filter-bridge-devices</code></td>
+      <td>Late (<code>process_message</code>, main thread)</td>
+      <td>Retained multi-KB device inventory, republished on every
+          device-set change.  Filtered <em>after</em> the node has
+          parsed it and refreshed the device-info cache, so the
+          <code>device</code>-block injection keeps working
+          regardless of this flag.</td></tr>
+  <tr><td><code>bridge/definitions</code></td>
+      <td><code>filter-bridge-definitions</code></td>
+      <td>Late (<code>process_message</code>, main thread)</td>
+      <td>Retained full device-type definition catalogue, typically
+          several MB &mdash; the largest single payload Z2M
+          emits.</td></tr>
+  <tr><td><code>bridge/info</code></td>
+      <td><code>filter-bridge-info</code></td>
+      <td>Late (<code>process_message</code>, main thread)</td>
+      <td>Bridge-status snapshot (version, coordinator,
+          permit_join, network key, ...).  Small but rarely
+          useful past the first connect.</td></tr>
+</table>
+<p>
+The reason for the split between early and late filtering is that
+the node may want to consume some of these envelopes internally
+even when the worksheet doesn't.  <code>bridge/devices</code> is
+the prime example today &mdash; suppressing it downstream still
+lets the device-info cache rebuild &mdash; and the same hook
+position is used for <code>bridge/definitions</code> and
+<code>bridge/info</code> so a future internal consumer can do the
+same.  <code>bridge/logging</code> has no such consumer, so it
+stays on the cheap early filter.
 </p>
 <p>
-The other <code>bridge/...</code> topics (<code>event</code>,
-<code>state</code>, <code>devices</code>, <code>groups</code>,
-<code>definitions</code>, <code>response/...</code>) carry structured
-data &mdash; device join / leave events, online / offline, retained
-inventories, RPC responses &mdash; and always pass through.  Users
-who want a stricter cut can narrow the subscribe-filter directly
-(e.g.&nbsp;<code>zigbee2mqtt/+</code>, which excludes the whole
-<code>bridge/</code> subtree).
+The remaining <code>bridge/...</code> topics (<code>event</code>,
+<code>state</code>, <code>groups</code>, <code>response/...</code>)
+carry low-volume structured data &mdash; device join / leave
+events, online / offline, RPC responses &mdash; and always pass
+through.  Users who want a stricter cut can narrow the
+subscribe-filter directly (e.g.&nbsp;<code>zigbee2mqtt/+</code>,
+which excludes the whole <code>bridge/</code> subtree).
 </p>
 
 <h5>Device-info injection</h5>
@@ -186,6 +224,22 @@ rebuilding the cache.
           a <code>PnMessage</code> is built.  Set FALSE to forward
           those log envelopes too &mdash; useful when piping Z2M logs
           into a Debug node or an external aggregator.</td></tr>
+  <tr><td><code>filter-bridge-devices</code></td>
+      <td>When TRUE (default), the retained
+          <code>zigbee2mqtt/bridge/devices</code> inventory publish
+          is consumed internally (the device-info cache is still
+          rebuilt) but suppressed downstream.  Set FALSE to forward
+          it too.</td></tr>
+  <tr><td><code>filter-bridge-definitions</code></td>
+      <td>When TRUE (default), the retained multi-MB
+          <code>zigbee2mqtt/bridge/definitions</code> publish is
+          dropped on the main thread after parsing.  Set FALSE to
+          forward.</td></tr>
+  <tr><td><code>filter-bridge-info</code></td>
+      <td>When TRUE (default), the retained
+          <code>zigbee2mqtt/bridge/info</code> bridge-status
+          snapshot is dropped on the main thread after parsing.
+          Set FALSE to forward.</td></tr>
   <tr><td><code>inject-device-info</code></td>
       <td>When TRUE (default), add the Z2M
           <code>include_device_information</code> identity scalars

@@ -33,10 +33,12 @@
  * properties because the names are dictated by the Z2M wire contract;
  * users who want different exclusions narrow the subscribe-filter
  * directly. */
-#define PN_ZIGBEE_BASE_TOPIC     "zigbee2mqtt"
-#define PN_ZIGBEE_LOGGING_TOPIC  "zigbee2mqtt/bridge/logging"
-#define PN_ZIGBEE_DEVICES_TOPIC  "zigbee2mqtt/bridge/devices"
-#define PN_ZIGBEE_BRIDGE_PREFIX  "zigbee2mqtt/bridge/"
+#define PN_ZIGBEE_BASE_TOPIC        "zigbee2mqtt"
+#define PN_ZIGBEE_LOGGING_TOPIC     "zigbee2mqtt/bridge/logging"
+#define PN_ZIGBEE_DEVICES_TOPIC     "zigbee2mqtt/bridge/devices"
+#define PN_ZIGBEE_DEFINITIONS_TOPIC "zigbee2mqtt/bridge/definitions"
+#define PN_ZIGBEE_INFO_TOPIC        "zigbee2mqtt/bridge/info"
+#define PN_ZIGBEE_BRIDGE_PREFIX     "zigbee2mqtt/bridge/"
 
 /* Per-device cache entry.  Two precomputed JsonNodes carrying
  * non-overlapping field sets, so each maps cleanly to one of the
@@ -81,6 +83,20 @@ struct _PnZigbeeSource
      * at any time while the broker connection is live. */
     gint filter_logging;
 
+    /* Whether process_message should swallow the bulky bridge envelopes
+     * (`bridge/devices`, `bridge/definitions`, `bridge/info`) after
+     * consuming them internally.  Unlike `bridge/logging` -- which is
+     * cheap to drop early in accept_topic because the node never needs
+     * to look at it -- these three carry data the node itself wants
+     * (devices feeds the device-info cache, and definitions/info may
+     * grow internal consumers later), so the filter has to live on the
+     * main-thread late hook: parse first, consume internally, then
+     * suppress the downstream emit by returning FALSE from
+     * process_message.  Main-thread only, like the inject_* flags. */
+    gboolean filter_bridge_devices;
+    gboolean filter_bridge_definitions;
+    gboolean filter_bridge_info;
+
     /* Whether process_message should graft a `device` block onto each
      * per-device state publish's `data.payload` at all.  Main-thread
      * only -- the property dialog and the process_message vfunc both
@@ -112,6 +128,9 @@ G_DEFINE_TYPE (PnZigbeeSource, pn_zigbee_source, PN_TYPE_MQTT)
 enum {
     PROP_0,
     PROP_FILTER_LOGGING,
+    PROP_FILTER_BRIDGE_DEVICES,
+    PROP_FILTER_BRIDGE_DEFINITIONS,
+    PROP_FILTER_BRIDGE_INFO,
     PROP_INJECT_DEVICE_INFO,
     PROP_INJECT_DEVICE_CAPABILITIES,
     N_PROPS,
@@ -705,12 +724,30 @@ pn_zigbee_source_process_message (
 
     /* Always refresh on bridge/devices, even when injection is
      * disabled, so toggling the property TRUE later does not require
-     * a fresh inventory publish to start working. */
+     * a fresh inventory publish to start working.  After consuming
+     * internally we honour the filter flag: returning FALSE here
+     * suppresses the downstream emit but the cache update above has
+     * already happened, so the node still gets the data it needs. */
     if (strcmp (topic, PN_ZIGBEE_DEVICES_TOPIC) == 0)
     {
         rebuild_device_cache (self, message);
+        if (self->filter_bridge_devices)
+            return FALSE;
         return pn_mqtt_real_process_message (base, message);
     }
+
+    /* bridge/definitions and bridge/info have no internal consumer
+     * yet -- we still parse them (the base already did) but the
+     * filter just suppresses the downstream emit.  Placed here, after
+     * the bridge/devices branch, so its cache-rebuild side effect
+     * isn't skipped. */
+    if (self->filter_bridge_definitions &&
+        strcmp (topic, PN_ZIGBEE_DEFINITIONS_TOPIC) == 0)
+        return FALSE;
+
+    if (self->filter_bridge_info &&
+        strcmp (topic, PN_ZIGBEE_INFO_TOPIC) == 0)
+        return FALSE;
 
     /* Skip any other bridge/... topic without lookup -- the
      * friendly-name index never contains a "bridge"-prefixed entry,
@@ -761,6 +798,15 @@ pn_zigbee_source_get_property (
         g_value_set_boolean (value,
                 g_atomic_int_get (&self->filter_logging) != 0);
         break;
+    case PROP_FILTER_BRIDGE_DEVICES:
+        g_value_set_boolean (value, self->filter_bridge_devices);
+        break;
+    case PROP_FILTER_BRIDGE_DEFINITIONS:
+        g_value_set_boolean (value, self->filter_bridge_definitions);
+        break;
+    case PROP_FILTER_BRIDGE_INFO:
+        g_value_set_boolean (value, self->filter_bridge_info);
+        break;
     case PROP_INJECT_DEVICE_INFO:
         g_value_set_boolean (value, self->inject_device_info);
         break;
@@ -790,6 +836,39 @@ pn_zigbee_source_set_property (
         {
             g_atomic_int_set (&self->filter_logging, want);
             g_object_notify_by_pspec (object, props[PROP_FILTER_LOGGING]);
+        }
+        break;
+    }
+    case PROP_FILTER_BRIDGE_DEVICES:
+    {
+        gboolean want = g_value_get_boolean (value);
+        if (self->filter_bridge_devices != want)
+        {
+            self->filter_bridge_devices = want;
+            g_object_notify_by_pspec (object,
+                    props[PROP_FILTER_BRIDGE_DEVICES]);
+        }
+        break;
+    }
+    case PROP_FILTER_BRIDGE_DEFINITIONS:
+    {
+        gboolean want = g_value_get_boolean (value);
+        if (self->filter_bridge_definitions != want)
+        {
+            self->filter_bridge_definitions = want;
+            g_object_notify_by_pspec (object,
+                    props[PROP_FILTER_BRIDGE_DEFINITIONS]);
+        }
+        break;
+    }
+    case PROP_FILTER_BRIDGE_INFO:
+    {
+        gboolean want = g_value_get_boolean (value);
+        if (self->filter_bridge_info != want)
+        {
+            self->filter_bridge_info = want;
+            g_object_notify_by_pspec (object,
+                    props[PROP_FILTER_BRIDGE_INFO]);
         }
         break;
     }
@@ -869,6 +948,48 @@ pn_zigbee_source_class_init (PnZigbeeSourceClass *klass)
             TRUE,
             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+    props[PROP_FILTER_BRIDGE_DEVICES] = g_param_spec_boolean (
+            "filter-bridge-devices", "Filter bridge/devices",
+            "When TRUE (default), the retained "
+            "zigbee2mqtt/bridge/devices inventory publish is consumed "
+            "internally -- the device-info cache that drives the "
+            "`device` block injection is still rebuilt from it -- but "
+            "is not forwarded downstream, so the worksheet stays clean "
+            "of the multi-KB inventory dump every time the device set "
+            "changes or the node reconnects.  Set FALSE to forward "
+            "the envelope too (useful when piping inventory into a "
+            "Debug node or a third-party device-discovery consumer); "
+            "the cache rebuild happens either way.",
+            TRUE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+    props[PROP_FILTER_BRIDGE_DEFINITIONS] = g_param_spec_boolean (
+            "filter-bridge-definitions", "Filter bridge/definitions",
+            "When TRUE (default), the retained "
+            "zigbee2mqtt/bridge/definitions publish -- Z2M's full "
+            "device-type definition catalogue, typically several MB "
+            "-- is dropped on the main thread after parsing, so it "
+            "does not flood downstream Debug nodes.  Filtered on "
+            "process_message rather than accept_topic so a future "
+            "internal consumer (e.g. richer category synthesis) can "
+            "still see the parsed payload.  Set FALSE to forward it "
+            "downstream.",
+            TRUE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+    props[PROP_FILTER_BRIDGE_INFO] = g_param_spec_boolean (
+            "filter-bridge-info", "Filter bridge/info",
+            "When TRUE (default), the retained "
+            "zigbee2mqtt/bridge/info publish -- Z2M's bridge-status "
+            "snapshot (version, coordinator, permit_join, network "
+            "key, ...) -- is dropped on the main thread after "
+            "parsing.  Filtered on process_message rather than "
+            "accept_topic so a future internal consumer can still "
+            "see the parsed payload.  Set FALSE to forward it "
+            "downstream (useful for a bridge-status dashboard).",
+            TRUE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
     props[PROP_INJECT_DEVICE_INFO] = g_param_spec_boolean (
             "inject-device-info", "Inject device info",
             "When TRUE (default), the injected `device` block on "
@@ -923,6 +1044,9 @@ static void
 pn_zigbee_source_init (PnZigbeeSource *self)
 {
     self->filter_logging             = 1;
+    self->filter_bridge_devices      = TRUE;
+    self->filter_bridge_definitions  = TRUE;
+    self->filter_bridge_info         = TRUE;
     self->inject_device_info         = TRUE;
     self->inject_device_capabilities = FALSE;
     self->device_info = g_hash_table_new_full (
