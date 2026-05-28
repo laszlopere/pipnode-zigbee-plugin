@@ -24,11 +24,16 @@
 /*  publishes to -- and follow the documented Z2M topic / payload      */
 /*  contract.                                                          */
 /*                                                                     */
-/*  Scaffold only at this point: the module loads cleanly and          */
-/*  registers zero node types.  As nodes (e.g. ZigbeeDevice,           */
-/*  ZigbeeLightSet, ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, ...)  */
-/*  land they will be added to pn_plugin_init below alongside their    */
-/*  pn-zigbee-<node>.c / .h source and a help/<TypeName>.html page.    */
+/*  Currently registered nodes:                                        */
+/*                                                                     */
+/*    * PnZigbeeSwitch -- bidirectional on/off slider for a single     */
+/*      Z2M endpoint (zigbee2mqtt/<friendly_name> in, .../set out).    */
+/*    * PnZnpPing -- low-level liveness probe that talks ZNP over USB  */
+/*      serial directly to the coordinator dongle.                     */
+/*                                                                     */
+/*  Further nodes (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, ...)   */
+/*  will be added alongside their pn-zigbee-<node>.c / .h source and   */
+/*  a help/<TypeName>.html page.                                       */
 /* ------------------------------------------------------------------ */
 
 #include <gmodule.h>
@@ -36,6 +41,7 @@
 #include <pn-node-factory.h>
 #include <pn-plugin.h>
 
+#include "pn-zigbee-switch.h"
 #include "pn-znp-ping.h"
 
 G_MODULE_EXPORT const PnPluginInfo *
@@ -51,6 +57,7 @@ pn_plugin_init (PnNodeFactory *factory)
                        "directly over USB serial.",
     };
 
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SWITCH);
     pn_node_factory_register (factory, PN_TYPE_ZNP_PING);
 
     return &info;

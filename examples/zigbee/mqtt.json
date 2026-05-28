@@ -1,0 +1,92 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnMqtt",
+      "uuid" : "29996bab-7801-4995-b21a-5f196cc9797b",
+      "name" : "MQTT Source",
+      "worksheet" : "Worksheet",
+      "topic" : "zigbee2mqtt/",
+      "position" : {
+        "x" : 60.0,
+        "y" : 120.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "tcp://mqtt.homelab.local:1883",
+        "subscribe-topic" : "zigbee2mqtt/#",
+        "username" : "",
+        "client-id" : "",
+        "qos" : 0
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "ae957f56-fca6-4efb-8857-efef3f867c83",
+      "name" : "Debug Print",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 260.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "target" : "Debug View",
+        "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnZigbeeSwitch",
+      "uuid" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031",
+      "name" : "Zigbee Switch 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 260.0,
+        "y" : 120.0
+      },
+      "properties" : {
+        "on" : false,
+        "friendly-name" : "0xa4c138a4c9626802",
+        "enforce-on-startup" : true
+      }
+    },
+    {
+      "type" : "PnMqttSink",
+      "uuid" : "475bf4a4-3eef-475b-8a21-d89f38af7499",
+      "name" : "MQTT Sink 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 500.0,
+        "y" : 120.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "topic-template" : "",
+        "payload" : "",
+        "retain" : false,
+        "username" : "",
+        "client-id" : "",
+        "qos" : 0
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "29996bab-7801-4995-b21a-5f196cc9797b",
+      "target_id" : "ae957f56-fca6-4efb-8857-efef3f867c83"
+    },
+    {
+      "source_id" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031",
+      "target_id" : "475bf4a4-3eef-475b-8a21-d89f38af7499"
+    },
+    {
+      "source_id" : "29996bab-7801-4995-b21a-5f196cc9797b",
+      "target_id" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}

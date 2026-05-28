@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Switch (PnZigbeeSwitch) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeSwitch">Zigbee Switch</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeSwitch</code>.
+</p>
+<p>
+Bidirectional device node for a single Zigbee on/off endpoint exposed
+by a <a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a> bridge.
+Merges the on-canvas slide switch (<em>Switch</em>) with the inbound
+state filter and the outbound <code>set</code> command builder into
+one node so the canonical &ldquo;show the device state, let the user
+flip it&rdquo; worksheet wires up as three nodes:
+</p>
+<pre>MQTT Source &rarr; Zigbee Switch (friendly-name = livingroom_lamp) &rarr; MQTT Sink</pre>
+<p>
+Subclass of <em>Switch</em>, so the worksheet's slider-click routing,
+hit-testing and painting all come from the same implementation
+&mdash; only the encode / decode shape and the device-side topic
+contract are Zigbee-flavoured.
+</p>
+
+<h5>Direction split</h5>
+<table>
+  <tr><th>Direction</th><th>Behaviour</th></tr>
+  <tr><td>Inbound (MQTT &rarr; latch)</td>
+      <td>A message whose envelope topic is exactly
+          <code>zigbee2mqtt/&lt;friendly-name&gt;</code> (the
+          canonical Z2M state topic, no <code>/set</code> or
+          <code>/availability</code> suffix) and whose
+          <code>data.payload</code> JSON object carries
+          <code>"state": "ON"</code> or <code>"OFF"</code> syncs the
+          latch <strong>silently</strong> &mdash; the slider position
+          updates but <em>nothing is emitted downstream</em>.  The
+          inbound is an authoritative state observation, not a
+          transit message that should fan out; forwarding it would
+          either leak raw MQTT bytes into observer nodes or close a
+          loop back through the sink.</td></tr>
+  <tr><td>User click (latch &rarr; MQTT)</td>
+      <td>Clicking the slider flips the latch and emits a fresh Z2M
+          command message: envelope topic
+          <code>zigbee2mqtt/&lt;friendly-name&gt;/set</code>,
+          <code>data.payload</code> a JSON object
+          <code>{ "state": "ON" }</code> or
+          <code>{ "state": "OFF" }</code>, plus the standard
+          <code>data.value</code> / <code>data.success</code> /
+          <code>data.device</code> / <code>data.output</code> mirror
+          so a downstream <em>MQTT Sink</em> publishes the literal
+          Z2M expects, and a parallel observer (LED, Debug, Graph)
+          sees a value form it recognises.</td></tr>
+</table>
+<p>
+<strong>Startup command is opt-in.</strong> The base <em>Switch</em>
+announces its latch state once when a worksheet loads, so downstream
+nodes learn its position without a click.  Because the Zigbee
+Switch's output is a physical device command, this is <em>off by
+default</em>: the device's true state instead arrives over the
+inbound <code>zigbee2mqtt/&hellip;</code> path, which syncs the
+slider silently, so opening a worksheet never actuates hardware.
+Set <code>enforce-on-startup</code> if you want the worksheet to be
+the source of truth and force the device to the saved position on
+load.
+</p>
+
+<h5>Configuration</h5>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td>Zigbee2MQTT friendly name (e.g.
+          <code>livingroom_lamp</code>) the node binds to.  Inbound:
+          matched as the exact tail of
+          <code>zigbee2mqtt/&lt;friendly-name&gt;</code>.  Outbound:
+          stamped into
+          <code>zigbee2mqtt/&lt;friendly-name&gt;/set</code>.
+          <strong>Mandatory by design</strong> &mdash; an empty value
+          puts the node in the red &ldquo;configuration required&rdquo;
+          state, rejects every inbound message, and refuses to emit
+          on user-click, since silently defaulting would risk reading
+          or flipping the wrong physical device.</td></tr>
+  <tr><td><code>on</code></td>
+      <td>Inherited from <em>Switch</em>.  Current latch position
+          (persisted in the worksheet so the slider parks back the
+          way the user left it on reload).</td></tr>
+  <tr><td><code>enforce-on-startup</code></td>
+      <td>When enabled, the node emits a
+          <code>zigbee2mqtt/&lt;friendly-name&gt;/set</code> command
+          for the saved latch position once shortly after the
+          worksheet loads, forcing the physical device to match the
+          worksheet on startup.  <strong>Off by default</strong>
+          &mdash; opening a worksheet never actuates the device; the
+          latch tracks the device's reported state instead.  Enable
+          it when the worksheet (not the device) is the source of
+          truth for the desired state.</td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>MQTT Source (url = tcp://mqtt.homelab.local:1883, topic = zigbee2mqtt/#)
+    &rarr; Zigbee Switch (friendly-name = livingroom_lamp)
+        &rarr; MQTT Sink (url = tcp://mqtt.homelab.local:1883)</pre>
+<p>
+Click the slider on the canvas; the node emits
+<code>zigbee2mqtt/livingroom_lamp/set</code> with payload
+<code>{"state":"ON"}</code> or <code>{"state":"OFF"}</code>;
+<em>MQTT Sink</em> publishes; Z2M relays the command over the
+Zigbee mesh; the bulb responds; Z2M publishes the new state on
+<code>zigbee2mqtt/livingroom_lamp</code>; the <em>MQTT Source</em>
+forwards it; <em>Zigbee Switch</em>'s inbound path sees its own
+state confirmed and silently moves on (no echo storm).  Flipping
+the bulb externally (the Z2M frontend, an automation, another flow)
+follows the same return path and the slider tracks the new state.
+</p>
+<p>
+<strong>Z2M base topic.</strong> The default Z2M <code>base_topic</code>
+is <code>zigbee2mqtt</code>, which this node pins.  If your Z2M
+instance is configured with a non-default <code>base_topic</code>,
+adjust Z2M back to the default or wire the explicit, factored chain
+(generic filter + <em>Switch</em> + raw MQTT payload encoder) until a
+configurable-prefix variant lands.
+</p>
+
+</body>
+</html>
