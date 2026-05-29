@@ -148,7 +148,15 @@ pn_zigbee_relay_command_receive (
      * same rule #PnZigbeeRelayStatus uses on the read side, so the pair
      * stays internally consistent. */
     if (!read_value_member (pn_message_get_data (message), &value))
+    {
+        /* Configured node, but the upstream point handed us something
+         * we can't turn into an on/off command -- surface it rather
+         * than dropping silently (PLUGINS §12, channel 3). */
+        pn_node_log_warning (node,
+                             "ignoring input for %s: no usable numeric value",
+                             self->friendly_name);
         return;
+    }
 
     on = (value > 0.5);
 

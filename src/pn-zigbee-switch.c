@@ -124,7 +124,12 @@ pn_zigbee_switch_build_outbound_message (PnSwitch *base)
      * `zigbee2mqtt//set` topic.  The red ❗ visual already nags the
      * user to configure the field. */
     if (self->friendly_name == NULL || *self->friendly_name == '\0')
+    {
+        pn_node_log_warning (node,
+                             "no friendly_name configured; emitting the base "
+                             "switch shape instead of a zigbee2mqtt set command");
         return pn_switch_real_build_outbound_message (base);
+    }
 
     msg   = pn_message_new (node, NULL);
     topic = g_strdup_printf ("%s/%s/set", PN_ZIGBEE_BASE_TOPIC,
@@ -265,7 +270,15 @@ pn_zigbee_switch_receive (
     else if (g_ascii_strcasecmp (state, "OFF") == 0)
         want_on = FALSE;
     else
+    {
+        /* A present-but-non-binary state (e.g. "TOGGLE") is worth a
+         * line; the no-state-member case is filtered upstream as
+         * state == NULL and stays quiet, since Z2M publishes every
+         * attribute update on this same topic (PLUGINS §12, channel 3). */
+        pn_node_log_info (node, "ignoring unrecognized state \"%s\" for %s",
+                          state, self->friendly_name);
         return;
+    }
 
     if (want_on != pn_switch_get_on (base))
     {

@@ -24,10 +24,9 @@ that nodes are expected to use (all GTK-free, available headless):
     pn_node_log_info|warning|error() (pn-node.h:726-754) instead
     of stdout/stderr or silent drops.
 
-Audit (2026-05-29): Channel 2 is now done (item 1 below).
-Channel 3 (logging) remains: pn-zigbee-remote.c is the only node
-that uses pn_node_log_* at all -- it calls pn_node_log_info on
-each press (:247). The rest still drop diagnostics silently.
+Audit (2026-05-29): Channels 2 and 3 are now both done (items 1
+and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
+:247) is no longer the only node that logs.
 
 1. Channel 2 -- replace the hand-rolled red+glyph swap with
    pn_node_set_has_error: DONE (2026-05-29).
@@ -48,20 +47,36 @@ each press (:247). The rest still drop diagnostics silently.
      needs no migration: its friendly-name is an optional filter,
      not a mandatory config, so it has no unconfigured-error state.)
 
-2. Channel 3 -- adopt pn_node_log_* for diagnostics:
-   - src/pn-znp-ping.c -- highest value: emit_failure (:118) and
-     the paths that build rich reason strings (serial open :441,
-     timeout :507, write :523,537, HUP :343, g_strerror(errno)
-     :366) only travel downstream; also feed them to
-     pn_node_log_error.
-   - src/pn-zigbee-source.c -- silent JSON-drop / fallback paths
-     (:590, :617) could log a WARNING via pn_node_log_warning.
-   - src/pn-zigbee-switch.c -- silent drops in receive (:255,
-     :259, :263, :275) and fallback publish (:134).
-   - src/pn-zigbee-relay-status.c -- silent drops in receive
-     (:181, :185, :189, :202).
-   - src/pn-zigbee-relay-command.c -- silent drops in receive
-     (:152, :158).
+2. Channel 3 -- adopt pn_node_log_* for diagnostics: DONE
+   (2026-05-29).
+   Guiding rule applied: log a drop only where it is a genuine
+   diagnostic of bounded frequency. Drops on the broker-traffic
+   read path are deliberately left silent -- topic_matches_zigbee_
+   state matches the bare device topic zigbee2mqtt/<name>, on which
+   Z2M republishes every attribute (state, brightness, linkquality,
+   ...), so an absent "state" member is the routine case and would
+   flood the per-node log ring on every update.
+   - DONE. src/pn-znp-ping.c -- one pn_node_log_error in
+     emit_failure covers all six failure paths (serial open, reply
+     timeout, write x2, HUP/ERR, read errno), since each funnels its
+     reason string through there before emitting downstream.
+   - DONE. src/pn-zigbee-source.c rebuild_device_cache -- a WARNING
+     when the bridge/devices payload is not a JSON array (and the
+     prior cache is now kept untouched on that path); plus one
+     aggregated WARNING ("skipped N entries with no usable
+     friendly_name") instead of per-element spam.
+   - DONE. src/pn-zigbee-switch.c -- WARNING on the unconfigured
+     outbound fallback (user-toggle bounded); INFO on a present-but-
+     non-binary inbound state (e.g. "TOGGLE"). The state==NULL /
+     wrong-topic / unconfigured *read* drops stay silent (see rule).
+   - DONE. src/pn-zigbee-relay-status.c -- INFO on a present-but-
+     non-binary inbound state, mirroring the switch. read-path
+     filtering drops stay silent.
+   - DONE. src/pn-zigbee-relay-command.c -- WARNING when a
+     configured node gets an input with no usable numeric value
+     (upstream-emit bounded). The unconfigured drop stays silent
+     (the red error visual already flags it, and it would repeat on
+     every upstream emit).
 
 
 ----------------------------------------------------------------

@@ -132,6 +132,13 @@ emit_failure (PnZnpPing *self, const gchar *reason)
     pn_message_set_string  (msg, "device",  self->device ? self->device : "");
     pn_node_emit_message (PN_NODE (self), msg);
     g_object_unref (msg);
+
+    /* Every failure path (serial open, reply timeout, write, HUP/ERR,
+     * read errno) funnels through here, so mirroring the reason into
+     * the node's diagnostic log once covers them all -- the downstream
+     * failure message alone is invisible under a desktop launcher
+     * (PLUGINS §12, channel 3). */
+    pn_node_log_error (PN_NODE (self), "%s", reason);
 }
 
 static gchar *

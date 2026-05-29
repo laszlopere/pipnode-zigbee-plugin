@@ -584,10 +584,19 @@ rebuild_device_cache (
     JsonNode  *payload_node;
     JsonArray *arr;
     guint      n, i;
+    guint      skipped = 0;
 
     payload_node = pn_message_get_member (message, "payload");
     if (payload_node == NULL || !JSON_NODE_HOLDS_ARRAY (payload_node))
+    {
+        /* Not the array we expect -- bail before clearing the table so
+         * the previous inventory survives a malformed publish (PLUGINS
+         * §12, channel 3: log instead of dropping silently). */
+        pn_node_log_warning (PN_NODE (self),
+                             "bridge/devices payload is not a JSON array; "
+                             "ignoring (device cache unchanged)");
         return;
+    }
 
     arr = json_node_get_array (payload_node);
     if (arr == NULL)
@@ -605,25 +614,45 @@ rebuild_device_cache (
         ZigbeeCachedDevice *entry;
 
         if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+        {
+            skipped++;
             continue;
+        }
 
         dev = json_node_get_object (elem);
         if (!json_object_has_member (dev, "friendly_name"))
+        {
+            skipped++;
             continue;
+        }
 
         fname_node = json_object_get_member (dev, "friendly_name");
-        if (fname_node == NULL || !JSON_NODE_HOLDS_VALUE (fname_node))
+        if (fname_node == NULL || !JSON_NODE_HOLDS_VALUE (fname_node) ||
+            json_node_get_value_type (fname_node) != G_TYPE_STRING)
+        {
+            skipped++;
             continue;
-        if (json_node_get_value_type (fname_node) != G_TYPE_STRING)
-            continue;
+        }
 
         fname = json_node_get_string (fname_node);
         if (fname == NULL || *fname == '\0')
+        {
+            skipped++;
             continue;
+        }
 
         entry = build_cached_device (dev);
         g_hash_table_insert (self->device_info, g_strdup (fname), entry);
     }
+
+    /* One aggregated line rather than per-entry spam: a healthy
+     * inventory skips nothing, so this stays quiet in normal operation
+     * (PLUGINS §12, channel 3). */
+    if (skipped > 0)
+        pn_node_log_warning (PN_NODE (self),
+                             "bridge/devices: skipped %u entr%s with no "
+                             "usable friendly_name",
+                             skipped, skipped == 1 ? "y" : "ies");
 }
 
 /** Splice a fresh `device` object built from the chosen union of

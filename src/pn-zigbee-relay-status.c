@@ -192,7 +192,15 @@ pn_zigbee_relay_status_receive (
     else if (g_ascii_strcasecmp (state, "OFF") == 0)
         on = FALSE;
     else
+    {
+        /* A present-but-non-binary state (e.g. "TOGGLE") earns a line;
+         * the no-state-member case is filtered upstream as state == NULL
+         * and stays quiet, since Z2M publishes every attribute update on
+         * this same topic (PLUGINS §12, channel 3). */
+        pn_node_log_info (node, "ignoring unrecognized state \"%s\" for %s",
+                          state, self->friendly_name);
         return;
+    }
 
     /* Reshape into the canonical pipnode message contract so a
      * downstream LED / Debug / Graph reads the same value/success/output
