@@ -74,12 +74,23 @@ cc="${CC:-cc}"
 # logic also only runs on the network thread, so it belongs in an
 # integration test with a throwaway broker, not here.
 #
+# NOTE (2026-05-29): tests/test-zigbee-source.c is written and complete
+# (69 checks) and drives the accept_topic / process_message vfuncs directly,
+# with no main loop.  It relies on the host's *source-tree* pn-mqtt.c, which
+# debounces the connect onto a main-loop idle (so not pumping a loop = no
+# network).  The currently INSTALLED pipnode-core still connects
+# synchronously from construction, so wiring the test in here would hit the
+# live broker.  Re-enable the row below once an updated pipnode-core (with
+# the idle-debounced connect) is installed -- verified with:
+#   strace -f -e trace=network <built test>  # must show no connect() to :1883
+#
 #   <test-basename>            <node source under src/>
 tests_table=(
     "test-zigbee-relay-status   pn-zigbee-relay-status.c"
     "test-zigbee-relay-command  pn-zigbee-relay-command.c"
     "test-zigbee-remote         pn-zigbee-remote.c"
     "test-zigbee-switch         pn-zigbee-switch.c"
+    # "test-zigbee-source         pn-zigbee-source.c"   # blocked: see NOTE above
 )
 
 selected () {
