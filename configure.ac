@@ -9,7 +9,7 @@
 # is server-installable and runs under pipnode-run headless.
 
 AC_PREREQ([2.69])
-AC_INIT([pipnode-zigbee-plugin], [0.1.0-dev], [laszlopere@gmail.com],
+AC_INIT([pipnode-zigbee-plugin], [0.2.0-dev], [laszlopere@gmail.com],
         [pipnode-zigbee-plugin], [https://github.com/laszlopere/pipnode-zigbee-plugin])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIRS([m4])
