@@ -4,10 +4,13 @@ Nodes for interacting with [Zigbee](https://csa-iot.org/all-solutions/zigbee/)
 devices from [pipnode](https://github.com/laszlopere/pipnode) worksheets,
 driving them via a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge.
 
-> **Status: scaffold.** The build, packaging, and plugin entry point are
-> in place and load cleanly, but no node types are registered yet. Nodes
-> (ZigbeeDevice, ZigbeeLightSet, ZigbeeEvent, ZigbeePair,
-> ZigbeeBridgeStatus, …) will be added incrementally.
+![A Zigbee remote wired to a Zigbee switch on a pipnode worksheet](screenshots/remote-switch.png)
+
+> **Status: in progress.** The following node types are registered and
+> usable: `PnZigbeeSource`, `PnZigbeeSwitch`, `PnZigbeeRelayStatus`,
+> `PnZigbeeRelayCommand`, `PnZigbeeRemote`, and `PnZnpPing`. More
+> (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, …) will be added
+> incrementally.
 
 This is a **proprietary, closed-source** plugin. It talks to the pipnode
 host only through the documented plugin interface, so it is covered by
