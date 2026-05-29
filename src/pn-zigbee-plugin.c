@@ -42,6 +42,17 @@
 /*  Further nodes (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, ...)   */
 /*  will be added alongside their pn-zigbee-<node>.c / .h source and   */
 /*  a help/<TypeName>.html page.                                       */
+/*                                                                     */
+/*  TODO: add a PnZigbeeSink -- the publish-side companion to          */
+/*  PnZigbeeSource -- once the host's PnMqttSink becomes derivable.    */
+/*  PnZigbeeSource works by subclassing the derivable PnMqtt base;     */
+/*  the symmetric sink would subclass PnMqttSink, but that type is     */
+/*  currently declared with G_DECLARE_FINAL_TYPE (non-derivable) in    */
+/*  ../pipnode/lib/pn-mqtt-sink.h, so it cannot be specialised here.   */
+/*  When it is switched to G_DECLARE_DERIVABLE_TYPE, wire up a         */
+/*  Zigbee2MQTT-flavoured sink (default zigbee2mqtt/<name>/set topic,  */
+/*  Z2M-shaped payload) the same way PnZigbeeSource specialises the    */
+/*  source.                                                            */
 /* ------------------------------------------------------------------ */
 
 #include <gmodule.h>
