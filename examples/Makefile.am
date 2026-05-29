@@ -7,4 +7,5 @@
 zigbeedir = $(PIPNODE_EXAMPLESDIR)/zigbee
 dist_zigbee_DATA = \
 	zigbee/zigbee-staircase.json \
+	zigbee/zigbee-two-plugs.json \
 	zigbee/mqtt.json

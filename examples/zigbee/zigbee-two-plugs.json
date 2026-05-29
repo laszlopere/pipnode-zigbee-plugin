@@ -1,0 +1,137 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnZigbeeSwitch",
+      "uuid" : "c6160241-af67-44a2-8e43-5e5530522080",
+      "name" : "Zigbee Switch 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "on" : true,
+        "friendly-name" : "0xa4c138a4c9626802",
+        "enforce-on-startup" : true
+      }
+    },
+    {
+      "type" : "PnZigbeeSource",
+      "uuid" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "name" : "Zigbee Source 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 60.0,
+        "y" : 100.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
+        "subscribe-topic" : "zigbee2mqtt/#",
+        "qos" : 0,
+        "filter-logging" : true,
+        "filter-bridge-devices" : true,
+        "filter-bridge-definitions" : true,
+        "filter-bridge-info" : true,
+        "inject-device-info" : false,
+        "inject-device-capabilities" : false
+      }
+    },
+    {
+      "type" : "PnZigbeeSwitch",
+      "uuid" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f",
+      "name" : "Zigbee Switch 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 140.0
+      },
+      "properties" : {
+        "on" : true,
+        "friendly-name" : "0xa4c1380f9af0ffff",
+        "enforce-on-startup" : true
+      }
+    },
+    {
+      "type" : "PnMqttSink",
+      "uuid" : "4ea48873-156f-4cc1-aa51-5457159fc852",
+      "name" : "MQTT Sink 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 480.0,
+        "y" : 100.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
+        "topic-template" : "",
+        "payload" : "",
+        "retain" : false,
+        "qos" : 0
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "08a7f710-40e8-4740-b5a5-937a4ce278dc",
+      "name" : "Debug Print 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 440.0,
+        "y" : 280.0
+      },
+      "properties" : {
+        "target" : "Standard Error",
+        "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnFilter",
+      "uuid" : "2ebf685e-fd36-4b31-ae74-e9f1f66b8150",
+      "name" : "Filter 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 280.0
+      },
+      "properties" : {
+        "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c13860befb28ec\"}]"
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "c6160241-af67-44a2-8e43-5e5530522080"
+    },
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f"
+    },
+    {
+      "source_id" : "c6160241-af67-44a2-8e43-5e5530522080",
+      "target_id" : "4ea48873-156f-4cc1-aa51-5457159fc852"
+    },
+    {
+      "source_id" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f",
+      "target_id" : "4ea48873-156f-4cc1-aa51-5457159fc852"
+    },
+    {
+      "source_id" : "2ebf685e-fd36-4b31-ae74-e9f1f66b8150",
+      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "2ebf685e-fd36-4b31-ae74-e9f1f66b8150"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}

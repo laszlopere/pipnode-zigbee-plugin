@@ -29,9 +29,9 @@
       "properties" : {
         "broker-profile" : "",
         "url" : "",
-        "subscribe-topic" : "zigbee2mqtt/#",
         "username" : "",
         "client-id" : "",
+        "subscribe-topic" : "zigbee2mqtt/#",
         "qos" : 0,
         "filter-logging" : true,
         "filter-bridge-devices" : true,
@@ -97,12 +97,12 @@
       },
       "properties" : {
         "broker-profile" : "",
-        "url" : "tcp://mqtt.homelab.local:1883",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
         "topic-template" : "",
         "payload" : "",
         "retain" : false,
-        "username" : "",
-        "client-id" : "",
         "qos" : 0
       }
     },
