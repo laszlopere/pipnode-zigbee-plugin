@@ -86,8 +86,8 @@
         "y" : 280.0
       },
       "properties" : {
-        "target" : "Standard Error",
-        "format" : "JSON"
+        "target" : "Debug View",
+        "format" : "text"
       }
     },
     {
@@ -179,6 +179,18 @@
     },
     {
       "source_id" : "9dd14181-9a17-4912-bbe7-eab5ceb646e2",
+      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "2ebf685e-fd36-4b31-ae74-e9f1f66b8150",
+      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "fa77a2c5-428c-4412-aacb-ee5cafd03536",
+      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "8576afee-a672-49c2-a62e-de5c7233d9b8",
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
     }
   ],
