@@ -49,3 +49,6 @@ Makefile.in
 # editor swap / backup files
 *.swp
 *.swo
+
+# unit-test build output (run-tests.sh)
+/tests/.build/
