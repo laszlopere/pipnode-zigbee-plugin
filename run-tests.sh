@@ -80,7 +80,6 @@ tests_table=(
     "test-zigbee-relay-command  pn-zigbee-relay-command.c"
     "test-zigbee-remote         pn-zigbee-remote.c"
     "test-zigbee-switch         pn-zigbee-switch.c"
-    "test-znp-ping              pn-znp-ping.c"
 )
 
 selected () {

@@ -8,7 +8,7 @@ driving them via a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge.
 
 > **Status: in progress.** The following node types are registered and
 > usable: `PnZigbeeSource`, `PnZigbeeSwitch`, `PnZigbeeRelayStatus`,
-> `PnZigbeeRelayCommand`, `PnZigbeeRemote`, and `PnZnpPing`. More
+> `PnZigbeeRelayCommand`, and `PnZigbeeRemote`. More
 > (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, …) will be added
 > incrementally.
 

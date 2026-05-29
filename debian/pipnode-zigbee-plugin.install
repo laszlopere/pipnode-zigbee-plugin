@@ -1,5 +1,4 @@
 usr/lib/*/pipnode/plugins/pipnode_zigbee.so
 usr/share/pipnode/help/PnZigbeeSource.html
 usr/share/pipnode/help/PnZigbeeSwitch.html
-usr/share/pipnode/help/PnZnpPing.html
 usr/share/pipnode/examples/zigbee/*.json

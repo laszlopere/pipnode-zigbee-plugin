@@ -36,8 +36,6 @@
 /*      factored write-half (value message in, .../set command out).   */
 /*    * PnZigbeeRemote -- filters remote button-press events (payload  */
 /*      `action`) and reshapes them into the canonical message shape.  */
-/*    * PnZnpPing -- low-level liveness probe that talks ZNP over USB  */
-/*      serial directly to the coordinator dongle.                     */
 /*                                                                     */
 /*  Further nodes (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, ...)   */
 /*  will be added alongside their pn-zigbee-<node>.c / .h source and   */
@@ -65,7 +63,6 @@
 #include "pn-zigbee-remote.h"
 #include "pn-zigbee-source.h"
 #include "pn-zigbee-switch.h"
-#include "pn-znp-ping.h"
 
 G_MODULE_EXPORT const PnPluginInfo *
 pn_plugin_init (PnNodeFactory *factory)
@@ -75,9 +72,7 @@ pn_plugin_init (PnNodeFactory *factory)
         .name        = "pipnode-zigbee",
         .version     = "0.1.0",
         .description = "Zigbee device control / event nodes driven through a "
-                       "Zigbee2MQTT bridge over MQTT, plus low-level ZNP "
-                       "diagnostic nodes that talk to the coordinator dongle "
-                       "directly over USB serial.",
+                       "Zigbee2MQTT bridge over MQTT.",
     };
 
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SOURCE);
@@ -85,7 +80,6 @@ pn_plugin_init (PnNodeFactory *factory)
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_STATUS);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_COMMAND);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_REMOTE);
-    pn_node_factory_register (factory, PN_TYPE_ZNP_PING);
 
     return &info;
 }

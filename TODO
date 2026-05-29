@@ -30,12 +30,6 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
 
 1. Channel 2 -- replace the hand-rolled red+glyph swap with
    pn_node_set_has_error: DONE (2026-05-29).
-   - DONE. src/pn-znp-ping.c apply_visual_state now keeps the
-     healthy magenta + radio glyph set unconditionally and toggles
-     pn_node_set_has_error (node, !alive); the host paints the red
-     ❗ overlay. (This also fixed a latent grey body -- the node
-     had never seeded an instance colour, and pn_node_get_color()
-     has no class fallback.)
    - DONE. The three zigbee swaps (pn-zigbee-switch.c,
      pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
      keep magenta + toggle glyph and toggle has_error while
@@ -56,10 +50,6 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
    Z2M republishes every attribute (state, brightness, linkquality,
    ...), so an absent "state" member is the routine case and would
    flood the per-node log ring on every update.
-   - DONE. src/pn-znp-ping.c -- one pn_node_log_error in
-     emit_failure covers all six failure paths (serial open, reply
-     timeout, write x2, HUP/ERR, read errno), since each funnels its
-     reason string through there before emitting downstream.
    - DONE. src/pn-zigbee-source.c rebuild_device_cache -- a WARNING
      when the bridge/devices payload is not a JSON array (and the
      prior cache is now kept untouched on that path); plus one
@@ -98,6 +88,21 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
      host stop seeding an instance-level override from PnSwitch.
      Caught by tests/test-zigbee-switch.c (which currently does
      not assert class_name for this reason).
+   - Update (2026-05-29): the host getter was already fixed for
+     this -- pipnode commit 97acd76 made pn_node_get_class_name()
+     fall back to the class-level PnNodeClass.class_name when there
+     is no per-instance override (lib/pn-node.c:889-898), and
+     deprecated pn_node_set_class_name() for plugin _init() use.
+     That alone does NOT fix us, though: PnSwitch's own
+     pn_switch_init still seeds a per-instance "Switch"
+     (lib/pn-switch.c:462) -- 97acd76 cleaned up pn_mqtt_init but
+     left pn-switch.c -- so the getter finds that non-empty
+     per-instance value and never reaches the new class-level
+     fallback. Decided fix: drop the pn_node_set_class_name (node,
+     "Switch") line at pn-switch.c:462 in pipnode (mirroring the
+     pn_mqtt_init cleanup); then PnZigbeeSwitch inherits "Zigbee
+     Switch" for free. To be done in pipnode later; once landed,
+     enable the class_name assertion in tests/test-zigbee-switch.c.
 
 
 ----------------------------------------------------------------
@@ -130,46 +135,7 @@ below are behavioral / contract issues.
      already flags, and success is correct on the path that
      matters.
 
-5. PnZnpPing reply timeout is effectively dead at the default
-   interval.
-   src/pn-znp-ping.c:501-517, :541-556 -- the 800 ms REPLY_TIMEOUT
-   is only *checked* on the next send_ping, which is driven by the
-   poll cadence (interval, default 5 s). So a dead dongle isn't
-   reported for up to ~5 s, and with interval == 0 a never-answered
-   ping is never timed out (waiting_for_ping sticks TRUE, the node
-   never flips to its dead visual).
-   - Arm a dedicated one-shot g_timeout_add for the reply window
-     when a ping is sent, instead of piggy-backing on the poll
-     tick.
-
-6. PnZnpPing IO-watch teardown double-retires the dispatching
-   source.
-   src/pn-znp-ping.c:341-348, :364-371 -- these paths call
-   close_device() (which runs g_source_remove (io_watch_id), :471)
-   on the watch that is *currently dispatching*, then return
-   G_SOURCE_REMOVE; the io_watch_id = 0 after is a dead store
-   (close_device already zeroed it). Benign under current GLib
-   (SOURCE_DESTROYED guard) but incorrect ordering.
-   - Zero io_watch_id *before* calling close_device so its
-     internal remove is skipped, and rely on the G_SOURCE_REMOVE
-     return.
-
-7. PnZnpPing write_frame is not self-defensive against oversized
-   len.
-   src/pn-znp-ping.c:232 -- buf[5 + ZNP_MAX_DATA] (255 bytes) but
-   len is a guint8 up to 255, so buf[4+len] could index 259. Not
-   exploitable today (all callers pass len = 0).
-   - Add a len <= ZNP_MAX_DATA guard before a future caller
-     overflows it.
-
-8. PnZnpPing full-buffer wipe can drop an in-progress frame.
-   src/pn-znp-ping.c:353-354 -- when the 1 KB rx buffer fills with
-   no parseable SOF it silently resets everything, including a
-   legitimate partial frame. Low impact (max frame is 255 B).
-   - Consider discarding only up to the last SOF rather than the
-     whole buffer.
-
-9. PnZigbeeSource: malformed/empty bridge/devices is dropped and
+5. PnZigbeeSource: malformed/empty bridge/devices is dropped and
    leaves a stale cache.
    src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
    momentarily-[] inventory publish is swallowed (default
@@ -179,7 +145,7 @@ below are behavioral / contract issues.
    - Log a warning on the not-an-array / empty case, and consider
      keeping the previous cache when the new array is empty.
 
-10. Boolean Z2M state is silently dropped (switch & relay nodes).
+6. Boolean Z2M state is silently dropped (switch & relay nodes).
     src/pn-zigbee-relay-command.c:116-122,
     src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
     value/state readers accept only string / int64 / double, so Z2M
@@ -188,7 +154,7 @@ below are behavioral / contract issues.
     divergence.
     - Optionally accept G_TYPE_BOOLEAN for state / value.
 
-11. PnZigbeeRelayStatus leaves the live device state topic on its
+7. PnZigbeeRelayStatus leaves the live device state topic on its
     emitted message.
     src/pn-zigbee-relay-status.c:204-218 -- never calls
     pn_message_set_topic, unlike relay-command which rewrites it
@@ -198,12 +164,9 @@ below are behavioral / contract issues.
     - Clear the topic on the emitted message, or document why it's
       left intact.
 
-12. Test-coverage gaps (not bugs).
+8. Test-coverage gaps (not bugs).
     - PnZigbeeSource has zero unit tests -- its Z2M filter/inject
       logic (the most complex code in the plugin) is uncovered
       because constructing it auto-connects libmosquitto
       off-thread. Worth an integration test against a throwaway
       broker.
-    - PnZnpPing frame/FCS codec is never exercised --
-      test-znp-ping.c only checks metadata/defaults; the static
-      UNPI parser is untested.

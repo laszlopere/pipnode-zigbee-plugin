@@ -21,9 +21,7 @@ pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-relay-command.c \
 	pn-zigbee-relay-command.h \
 	pn-zigbee-remote.c \
-	pn-zigbee-remote.h \
-	pn-znp-ping.c \
-	pn-znp-ping.h
+	pn-zigbee-remote.h
 
 pipnode_zigbee_la_CFLAGS  = $(PIPNODE_CFLAGS)
 pipnode_zigbee_la_LDFLAGS = -module -avoid-version -shared
@@ -37,6 +35,5 @@ pnhelp_DATA = \
 	help/PnZigbeeSwitch.html \
 	help/PnZigbeeRelayStatus.html \
 	help/PnZigbeeRelayCommand.html \
-	help/PnZigbeeRemote.html \
-	help/PnZnpPing.html
+	help/PnZigbeeRemote.html
 EXTRA_DIST  = $(pnhelp_DATA)

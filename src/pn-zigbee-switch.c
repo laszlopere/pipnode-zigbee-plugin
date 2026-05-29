@@ -34,8 +34,8 @@
  * Tasmota switch use, since this is the same role on a different
  * transport.  While the friendly-name field is empty the node flags
  * itself via the host's has-error overlay (red body + ❗), the way
- * #PnZnpPing and #PnInject mark a node that needs configuration
- * before it can do anything useful -- see PLUGINS §12. */
+ * #PnInject marks a node that needs configuration before it can do
+ * anything useful -- see PLUGINS §12. */
 #define PN_ZIGBEE_SWITCH_ICON         "\xef\x88\x85"
 
 struct _PnZigbeeSwitch
@@ -68,8 +68,8 @@ static GParamSpec *props[N_PROPS];
 /* ------------------------------------------------------------------ */
 
 /** Override of the base #PnSwitch vfunc.  Keeps the Zigbee identity
- *  (magenta + toggle glyph, matching the palette established by
- *  #PnZnpPing) set unconditionally and toggles the host's has-error
+ *  (magenta + toggle glyph, matching the shared Zigbee palette) set
+ *  unconditionally and toggles the host's has-error
  *  overlay (red body + ❗) while the friendly-name field is empty, the
  *  way PLUGINS §12 prescribes -- no hand-rolled colour/icon swap.
  *  Repaint is still needed for the slider widget to redraw, so we keep
