@@ -18,26 +18,6 @@
       }
     },
     {
-      "type" : "PnMqttSink",
-      "uuid" : "a047813e-2232-49c1-b6fc-6342d1f41341",
-      "name" : "MQTT Sink 1",
-      "worksheet" : "Worksheet",
-      "position" : {
-        "x" : 420.0,
-        "y" : 140.0
-      },
-      "properties" : {
-        "broker-profile" : "",
-        "url" : "",
-        "topic-template" : "",
-        "payload" : "",
-        "retain" : false,
-        "username" : "",
-        "client-id" : "",
-        "qos" : 0
-      }
-    },
-    {
       "type" : "PnZigbeeSource",
       "uuid" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
       "name" : "Zigbee Source 1",
@@ -97,8 +77,8 @@
       "name" : "LED 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 567.11572265625,
-        "y" : 222.44696044921875
+        "x" : 580.0,
+        "y" : 380.0
       },
       "properties" : {
         "color" : "rgb(28,113,216)",
@@ -113,7 +93,7 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 760.0,
-        "y" : 300.0
+        "y" : 260.0
       },
       "properties" : {
         "broker-profile" : "",
@@ -133,10 +113,10 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 760.0,
-        "y" : 380.0
+        "y" : 320.0
       },
       "properties" : {
-        "target" : "Standard Error",
+        "target" : "Debug View",
         "format" : "JSON"
       }
     },
@@ -170,10 +150,6 @@
   ],
   "connections" : [
     {
-      "source_id" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608",
-      "target_id" : "a047813e-2232-49c1-b6fc-6342d1f41341"
-    },
-    {
       "source_id" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
       "target_id" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608"
     },
@@ -204,6 +180,10 @@
     {
       "source_id" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
       "target_id" : "468beb92-afb3-4770-b402-42b113685a93"
+    },
+    {
+      "source_id" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608",
+      "target_id" : "18f47053-d3b8-42ed-89b7-003e3ba9bb5d"
     }
   ],
   "sheets" : [
