@@ -79,11 +79,28 @@ default).
 
 <h5>Configuration</h5>
 <p>
-None.  The node acts on any remote button-press message it receives,
-so it needs no per-device setup.  To react to one specific remote or
-one specific button, follow it with a generic <em>Filter</em> node
-keyed on <code>payload.action</code> or the topic.
+Both properties are <strong>optional filters</strong>.  Left empty
+(the default) they are wildcards, so the node forwards every remote
+button press.  Set either to narrow the node to one specific remote
+and/or one specific button &mdash; they are ANDed.
 </p>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td>When set, only presses from this remote pass.  Matched
+          against the injected
+          <code>data.payload.device.friendlyName</code> (when an
+          upstream <em>Zigbee Source</em> injects device info) or,
+          failing that, the friendly-name tail of the envelope topic
+          (<code>zigbee2mqtt/&lt;tail&gt;</code> &mdash; the bare device
+          id for an unrenamed device), so you can enter either form.
+          <strong>Empty matches every remote.</strong></td></tr>
+  <tr><td><code>action</code></td>
+      <td>When set, only presses whose <code>data.payload.action</code>
+          equals this exact value pass (e.g. <code>emergency</code>,
+          <code>on</code>, <code>arrow_left_click</code>).
+          <strong>Empty matches every action.</strong></td></tr>
+</table>
 
 <h5>Wiring example</h5>
 <pre>MQTT/Zigbee Source (topic = zigbee2mqtt/#)

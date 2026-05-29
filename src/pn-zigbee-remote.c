@@ -36,9 +36,25 @@
 struct _PnZigbeeRemote
 {
     PnNode parent_instance;
+
+    /* Optional filters.  An empty / NULL value is a wildcard (match
+     * any), so a freshly-dropped node forwards every remote button
+     * press.  Set either to narrow the node to one specific remote
+     * and/or one specific button. */
+    gchar *friendly_name;
+    gchar *action;
 };
 
 G_DEFINE_TYPE (PnZigbeeRemote, pn_zigbee_remote, PN_TYPE_NODE)
+
+enum {
+    PROP_0,
+    PROP_FRIENDLY_NAME,
+    PROP_ACTION,
+    N_PROPS,
+};
+
+static GParamSpec *props[N_PROPS];
 
 /* ------------------------------------------------------------------ */
 /*  Payload introspection                                              */
@@ -130,6 +146,47 @@ resolve_remote_name (
     return "unknown";
 }
 
+/** Does @message's remote match the configured friendly-name filter?
+ *  An empty filter is a wildcard.  Otherwise it matches when the
+ *  configured name equals either the injected
+ *  `data.payload.device.friendlyName` or the friendly-name tail of the
+ *  envelope topic, so the filter works whether or not an upstream
+ *  #PnZigbeeSource injected the device block (the user can configure
+ *  either the Z2M friendly name or the bare device id). */
+static gboolean
+friendly_name_matches (
+        PnZigbeeRemote *self,
+        PnMessage      *message,
+        JsonObject     *payload)
+{
+    const gchar *topic;
+
+    if (self->friendly_name == NULL || *self->friendly_name == '\0')
+        return TRUE;
+
+    if (payload != NULL && json_object_has_member (payload, "device"))
+    {
+        JsonNode *device_node = json_object_get_member (payload, "device");
+        if (device_node != NULL && JSON_NODE_HOLDS_OBJECT (device_node))
+        {
+            const gchar *fname = peek_nonempty_string (
+                    json_node_get_object (device_node), "friendlyName");
+            if (fname != NULL && g_strcmp0 (fname, self->friendly_name) == 0)
+                return TRUE;
+        }
+    }
+
+    topic = pn_message_get_topic (message);
+    if (topic != NULL && g_str_has_prefix (topic, PN_ZIGBEE_BASE_TOPIC "/"))
+    {
+        const gchar *tail = topic + strlen (PN_ZIGBEE_BASE_TOPIC "/");
+        if (g_strcmp0 (tail, self->friendly_name) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Receive -- filter, reshape, forward                                */
 /* ------------------------------------------------------------------ */
@@ -145,10 +202,11 @@ pn_zigbee_remote_receive (
         PnNode    *node,
         PnMessage *message)
 {
-    JsonObject  *payload;
-    const gchar *action;
-    const gchar *name;
-    gchar       *output;
+    PnZigbeeRemote *self = PN_ZIGBEE_REMOTE (node);
+    JsonObject     *payload;
+    const gchar    *action;
+    const gchar    *name;
+    gchar          *output;
 
     payload = get_payload_object (message);
     if (payload == NULL)
@@ -160,6 +218,16 @@ pn_zigbee_remote_receive (
      * are filtered out here. */
     action = peek_nonempty_string (payload, "action");
     if (action == NULL)
+        return;
+
+    /* Apply the optional filters: an empty friendly-name / action is a
+     * wildcard, so the generic "forward every press" behaviour is the
+     * default.  A configured value narrows the node to one remote
+     * and/or one button. */
+    if (!friendly_name_matches (self, message, payload))
+        return;
+    if (self->action != NULL && *self->action != '\0' &&
+        g_strcmp0 (action, self->action) != 0)
         return;
 
     name = resolve_remote_name (message, payload);
@@ -183,13 +251,103 @@ pn_zigbee_remote_receive (
 }
 
 /* ------------------------------------------------------------------ */
+/*  Property plumbing                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Replace a string filter field with a copy of @value, normalising
+ *  NULL / "" to NULL so both forms behave as the same wildcard, and
+ *  notify on a real change. */
+static void
+set_string_filter (
+        PnZigbeeRemote *self,
+        gchar         **field,
+        const gchar    *value,
+        guint           prop_id)
+{
+    gchar *replacement = (value != NULL && *value != '\0')
+                       ? g_strdup (value) : NULL;
+
+    if (g_strcmp0 (*field, replacement) == 0)
+    {
+        g_free (replacement);
+        return;
+    }
+
+    g_free (*field);
+    *field = replacement;
+    g_object_notify_by_pspec (G_OBJECT (self), props[prop_id]);
+}
+
+static void
+pn_zigbee_remote_get_property (
+        GObject    *object,
+        guint       prop_id,
+        GValue     *value,
+        GParamSpec *pspec)
+{
+    PnZigbeeRemote *self = PN_ZIGBEE_REMOTE (object);
+
+    switch (prop_id)
+    {
+    case PROP_FRIENDLY_NAME:
+        g_value_set_string (value, self->friendly_name);
+        break;
+    case PROP_ACTION:
+        g_value_set_string (value, self->action);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+static void
+pn_zigbee_remote_set_property (
+        GObject      *object,
+        guint         prop_id,
+        const GValue *value,
+        GParamSpec   *pspec)
+{
+    PnZigbeeRemote *self = PN_ZIGBEE_REMOTE (object);
+
+    switch (prop_id)
+    {
+    case PROP_FRIENDLY_NAME:
+        set_string_filter (self, &self->friendly_name,
+                           g_value_get_string (value), PROP_FRIENDLY_NAME);
+        break;
+    case PROP_ACTION:
+        set_string_filter (self, &self->action,
+                           g_value_get_string (value), PROP_ACTION);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  GObject / class plumbing                                           */
 /* ------------------------------------------------------------------ */
 
 static void
+pn_zigbee_remote_finalize (GObject *object)
+{
+    PnZigbeeRemote *self = PN_ZIGBEE_REMOTE (object);
+
+    g_clear_pointer (&self->friendly_name, g_free);
+    g_clear_pointer (&self->action,        g_free);
+
+    G_OBJECT_CLASS (pn_zigbee_remote_parent_class)->finalize (object);
+}
+
+static void
 pn_zigbee_remote_class_init (PnZigbeeRemoteClass *klass)
 {
-    PnNodeClass *node_class = PN_NODE_CLASS (klass);
+    GObjectClass *object_class = G_OBJECT_CLASS (klass);
+    PnNodeClass  *node_class   = PN_NODE_CLASS (klass);
+
+    object_class->get_property = pn_zigbee_remote_get_property;
+    object_class->set_property = pn_zigbee_remote_set_property;
+    object_class->finalize     = pn_zigbee_remote_finalize;
 
     node_class->receive = pn_zigbee_remote_receive;
 
@@ -200,6 +358,29 @@ pn_zigbee_remote_class_init (PnZigbeeRemoteClass *klass)
     node_class->category     = "Zigbee";
     node_class->has_input    = TRUE;
     node_class->has_output   = TRUE;
+
+    props[PROP_FRIENDLY_NAME] = g_param_spec_string (
+            "friendly-name", "Friendly name",
+            "Optional remote filter.  When set, only button presses "
+            "from this remote pass; the value is matched against the "
+            "injected data.payload.device.friendlyName (when an "
+            "upstream Zigbee Source injects device info) or, failing "
+            "that, the friendly-name tail of the envelope topic "
+            "(zigbee2mqtt/<tail>, the bare device id for an unrenamed "
+            "device).  Empty (default) matches every remote.",
+            NULL,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+    props[PROP_ACTION] = g_param_spec_string (
+            "action", "Action",
+            "Optional button filter.  When set, only presses whose "
+            "data.payload.action equals this exact value pass (e.g. "
+            "\"emergency\", \"on\", \"arrow_left_click\").  Empty "
+            "(default) matches every action.",
+            NULL,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+    g_object_class_install_properties (object_class, N_PROPS, props);
 }
 
 static void
