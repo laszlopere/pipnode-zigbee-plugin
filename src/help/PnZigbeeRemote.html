@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Remote (PnZigbeeRemote) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeRemote">Zigbee Remote</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeRemote</code>.
+</p>
+<p>
+Filter and reshaping node for Zigbee remotes &mdash; scene
+controllers, wireless buttons, panic buttons &mdash; bridged through
+<a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a>.  A remote
+publishes each button press on <code>zigbee2mqtt/&lt;friendly_name&gt;</code>
+with a <code>data.payload</code> JSON object whose <code>action</code>
+member names the button:
+</p>
+<pre>{ "action": "emergency", "linkquality": 142 }</pre>
+<p>
+Drop this node between a <em>Zigbee Source</em> (or a plain
+<em>MQTT Source</em>) and any downstream node to turn those raw
+publishes into clean, canonical pipnode messages:
+</p>
+<pre>Zigbee Source &rarr; Zigbee Remote &rarr; Debug / Notify / Switch / &hellip;</pre>
+
+<h5>What it does</h5>
+<table>
+  <tr><th>Step</th><th>Behaviour</th></tr>
+  <tr><td>Filter</td>
+      <td>Only messages whose <code>data.payload</code> is an object
+          carrying a <strong>non-empty string</strong>
+          <code>action</code> pass &mdash; i.e. an actual button
+          press.  The idle / state-only publishes Z2M interleaves, and
+          the empty-action &ldquo;released&rdquo; frames some converters
+          emit, are dropped (nothing is forwarded).</td></tr>
+  <tr><td>Reshape</td>
+      <td>Survivors are stamped into the canonical message contract so
+          a downstream <em>LED</em>, <em>Debug</em>, <em>Graph</em> or
+          <em>Notify</em> reads the same shape it gets from any other
+          node:
+          <ul>
+            <li><code>data.success</code> = <code>true</code></li>
+            <li><code>data.value</code> = <code>1.0</code></li>
+            <li><code>data.output</code> = a human-readable line, e.g.
+                <code>Remote panic_button activated (action: emergency)</code></li>
+          </ul>
+          The original envelope and <code>data.payload</code> (the
+          <code>action</code>, <code>linkquality</code>, and any
+          injected <code>device</code> block) are left untouched, so a
+          downstream node can still inspect the detail.</td></tr>
+</table>
+
+<h5>How the remote is named</h5>
+<p>
+The name in <code>data.output</code> is resolved in this order:
+</p>
+<ol>
+  <li><code>data.payload.device.friendlyName</code> &mdash; the
+      identity block a <em>Zigbee Source</em> injects by default
+      (<code>inject-device-info</code>), which is the human-friendly
+      Z2M name.</li>
+  <li>The friendly-name tail of the envelope topic
+      (<code>zigbee2mqtt/&lt;tail&gt;</code> &rarr; <code>&lt;tail&gt;</code>);
+      for an unrenamed device this is its IEEE address, e.g.
+      <code>0xa4c138c974b825c2</code>.</li>
+  <li>The bare topic, then <code>unknown</code>, as last resorts.</li>
+</ol>
+<p>
+For the friendliest output, keep this node downstream of a
+<em>Zigbee Source</em> with device-info injection enabled (its
+default).
+</p>
+
+<h5>Configuration</h5>
+<p>
+None.  The node acts on any remote button-press message it receives,
+so it needs no per-device setup.  To react to one specific remote or
+one specific button, follow it with a generic <em>Filter</em> node
+keyed on <code>payload.action</code> or the topic.
+</p>
+
+<h5>Wiring example</h5>
+<pre>MQTT/Zigbee Source (topic = zigbee2mqtt/#)
+    &rarr; Zigbee Remote
+        &rarr; Notify (title = "{{output}}")</pre>
+<p>
+Pressing the emergency button publishes
+<code>zigbee2mqtt/0xa4c138c974b825c2</code> with
+<code>{"action":"emergency",&hellip;}</code>; the <em>Zigbee Source</em>
+forwards it (and, by default, injects the device block); the
+<em>Zigbee Remote</em> recognises the button press, sets
+<code>value=1.0</code> / <code>success=true</code> and an output line
+like <code>Remote panic_button activated (action: emergency)</code>,
+and the <em>Notify</em> node pops it on screen.
+</p>
+
+</body>
+</html>

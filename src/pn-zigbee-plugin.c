@@ -30,6 +30,8 @@
 /*      zigbee2mqtt/# and drops the noisy bridge/logging channel.      */
 /*    * PnZigbeeSwitch -- bidirectional on/off slider for a single     */
 /*      Z2M endpoint (zigbee2mqtt/<friendly_name> in, .../set out).    */
+/*    * PnZigbeeRemote -- filters remote button-press events (payload  */
+/*      `action`) and reshapes them into the canonical message shape.  */
 /*    * PnZnpPing -- low-level liveness probe that talks ZNP over USB  */
 /*      serial directly to the coordinator dongle.                     */
 /*                                                                     */
@@ -43,6 +45,7 @@
 #include <pn-node-factory.h>
 #include <pn-plugin.h>
 
+#include "pn-zigbee-remote.h"
 #include "pn-zigbee-source.h"
 #include "pn-zigbee-switch.h"
 #include "pn-znp-ping.h"
@@ -62,6 +65,7 @@ pn_plugin_init (PnNodeFactory *factory)
 
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SOURCE);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SWITCH);
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_REMOTE);
     pn_node_factory_register (factory, PN_TYPE_ZNP_PING);
 
     return &info;
