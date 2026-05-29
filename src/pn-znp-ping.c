@@ -718,7 +718,6 @@ pn_znp_ping_init (PnZnpPing *self)
     self->version_emitted = FALSE;
     self->last_alive   = FALSE;
 
-    pn_node_set_class_name (PN_NODE (self), "ZNP Ping");
     pn_node_set_has_input  (PN_NODE (self), FALSE);
     pn_node_set_has_output (PN_NODE (self), TRUE);
 

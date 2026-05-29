@@ -20,7 +20,6 @@
 #include <pn-message.h>
 
 #include <json-glib/json-glib.h>
-#include <string.h>
 
 /* Zigbee2MQTT publishes endpoint state on `zigbee2mqtt/<friendly_name>`
  * and accepts commands on `zigbee2mqtt/<friendly_name>/set`.  The prefix
@@ -448,11 +447,7 @@ pn_zigbee_switch_class_init (PnZigbeeSwitchClass *klass)
 static void
 pn_zigbee_switch_init (PnZigbeeSwitch *self)
 {
-    PnNode *node = PN_NODE (self);
-
     self->friendly_name = NULL;
-
-    pn_node_set_class_name (node, "Zigbee Switch");
 
     /* Default the base #PnSwitch startup announce OFF: our
      * build_outbound_message() emits a Z2M *set* command
