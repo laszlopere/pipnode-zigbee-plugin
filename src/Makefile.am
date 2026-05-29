@@ -16,6 +16,10 @@ pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-source.h \
 	pn-zigbee-switch.c \
 	pn-zigbee-switch.h \
+	pn-zigbee-relay-status.c \
+	pn-zigbee-relay-status.h \
+	pn-zigbee-relay-command.c \
+	pn-zigbee-relay-command.h \
 	pn-zigbee-remote.c \
 	pn-zigbee-remote.h \
 	pn-znp-ping.c \
@@ -31,6 +35,8 @@ pnhelpdir   = $(PIPNODE_HELPDIR)
 pnhelp_DATA = \
 	help/PnZigbeeSource.html \
 	help/PnZigbeeSwitch.html \
+	help/PnZigbeeRelayStatus.html \
+	help/PnZigbeeRelayCommand.html \
 	help/PnZigbeeRemote.html \
 	help/PnZnpPing.html
 EXTRA_DIST  = $(pnhelp_DATA)

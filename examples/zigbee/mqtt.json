@@ -8,8 +8,8 @@
       "name" : "Debug Print",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 500.0,
-        "y" : 200.0
+        "x" : 400.0,
+        "y" : 440.0
       },
       "properties" : {
         "target" : "Standard Output",
@@ -22,8 +22,8 @@
       "name" : "Zigbee Switch 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 260.0,
-        "y" : 120.0
+        "x" : 440.0,
+        "y" : 200.0
       },
       "properties" : {
         "on" : true,
@@ -37,7 +37,7 @@
       "name" : "MQTT Sink 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 500.0,
+        "x" : 600.0,
         "y" : 120.0
       },
       "properties" : {
@@ -57,7 +57,7 @@
       "name" : "Zigbee Source 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 60.0,
+        "x" : 20.0,
         "y" : 200.0
       },
       "properties" : {
@@ -81,12 +81,26 @@
       "name" : "Zigbee Remote 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
-        "y" : 280.0
+        "x" : 60.0,
+        "y" : 60.0
       },
       "properties" : {
         "friendly-name" : "0xa4c138c974b825c2",
         "action" : "arm_all_zones"
+      }
+    },
+    {
+      "type" : "PnStaircase",
+      "uuid" : "fd5cdedf-84bc-408e-ab68-5de5d85e1013",
+      "name" : "Staircase 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 260.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "on-time-ms" : 500,
+        "retriggerable" : true
       }
     }
   ],
@@ -105,6 +119,18 @@
     },
     {
       "source_id" : "63fe97dd-bc20-46fd-8a80-810e97ee92f8",
+      "target_id" : "fd5cdedf-84bc-408e-ab68-5de5d85e1013"
+    },
+    {
+      "source_id" : "fd5cdedf-84bc-408e-ab68-5de5d85e1013",
+      "target_id" : "a30abeb3-af8e-4ef1-9cb4-dfc6c495f031"
+    },
+    {
+      "source_id" : "63fe97dd-bc20-46fd-8a80-810e97ee92f8",
+      "target_id" : "ae957f56-fca6-4efb-8857-efef3f867c83"
+    },
+    {
+      "source_id" : "fd5cdedf-84bc-408e-ab68-5de5d85e1013",
       "target_id" : "ae957f56-fca6-4efb-8857-efef3f867c83"
     }
   ],

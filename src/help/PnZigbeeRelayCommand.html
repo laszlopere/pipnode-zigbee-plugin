@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Relay Command (PnZigbeeRelayCommand) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeRelayCommand">Zigbee Relay Command</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeRelayCommand</code>.
+</p>
+<p>
+Send-only command builder for a single Zigbee on/off endpoint exposed by
+a <a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a> bridge.  Where the
+<em>Zigbee Switch</em> fuses inbound state, the on-canvas slider and the
+outbound <code>set</code> builder into one widget, this node is the
+factored <strong>write-half</strong>: it has no latch and no slider, it
+just turns an incoming value message into a device command.  Pair it
+with a <em>Zigbee Relay Status</em> when you want independent read and
+write branches.
+</p>
+
+<h5>Behaviour</h5>
+<p>
+The node consumes the canonical pipnode value message (any node that
+emits a numeric <code>data.value</code> &mdash; an <em>Inject</em>, a
+<em>Switch</em>, a threshold filter, &hellip;), treats
+<code>value &gt; 0.5</code> as ON and the rest as OFF, and rewrites the
+envelope so a downstream <em>MQTT Sink</em> publishes straight to the
+device's command topic:
+</p>
+<table>
+  <tr><th>Member</th><th>Value</th></tr>
+  <tr><td><code>topic</code></td><td><code>zigbee2mqtt/&lt;friendly-name&gt;/set</code></td></tr>
+  <tr><td><code>data.payload</code></td><td>JSON object <code>{ "state": "ON" }</code> or <code>{ "state": "OFF" }</code></td></tr>
+  <tr><td><code>data.value</code></td><td><code>1.0</code> (ON) or <code>0.0</code> (OFF)</td></tr>
+  <tr><td><code>data.success</code></td><td><code>true</code></td></tr>
+  <tr><td><code>data.device</code></td><td>the configured friendly name</td></tr>
+  <tr><td><code>data.output</code></td><td><code>&lt;name&gt;: command state ON</code></td></tr>
+</table>
+<p>
+The payload is set as a structured JSON object (not a pre-stringified
+string): <em>MQTT Sink</em> serialises it back to JSON bytes on the wire,
+so a <em>Debug</em> node in between sees the structured form rather than
+opaque bytes.  This is exactly the shape the <em>Zigbee Switch</em>
+emits on a click, so the factored write-half is wire-compatible with the
+fused node.  A message that carries no usable numeric
+<code>data.value</code> leaves the device alone.
+</p>
+
+<h5>Configuration</h5>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td>Zigbee2MQTT friendly name (e.g.
+          <code>livingroom_lamp</code>) to command, stamped into
+          <code>zigbee2mqtt/&lt;friendly-name&gt;/set</code>.
+          <strong>Mandatory by design</strong> &mdash; an empty value
+          puts the node in the red &ldquo;configuration required&rdquo;
+          state and rejects every message, since silently defaulting
+          would risk flipping the wrong physical device.</td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>Inject (value = 1) &rarr; Zigbee Relay Command (friendly-name = livingroom_lamp)
+    &rarr; MQTT Sink (url = tcp://mqtt.homelab.local:1883)</pre>
+<p>
+The <em>Inject</em> fires a value; this node emits
+<code>zigbee2mqtt/livingroom_lamp/set</code> with payload
+<code>{"state":"ON"}</code>; <em>MQTT Sink</em> publishes; Z2M relays the
+command over the Zigbee mesh; the bulb responds.  Wire a
+<em>Zigbee Relay Status</em> off the same <em>MQTT Source</em> to observe
+the confirmed state independently.
+</p>
+<p>
+<strong>Z2M base topic.</strong> The default Z2M <code>base_topic</code>
+is <code>zigbee2mqtt</code>, which this node pins.  If your Z2M instance
+uses a non-default <code>base_topic</code>, adjust Z2M back to the
+default or wire the explicit, factored chain (payload encoder +
+<em>Rewrite</em>) until a configurable-prefix variant lands.
+</p>
+
+</body>
+</html>

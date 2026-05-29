@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Relay Status (PnZigbeeRelayStatus) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeRelayStatus">Zigbee Relay Status</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeRelayStatus</code>.
+</p>
+<p>
+Receive-only decoder for a single Zigbee on/off endpoint exposed by a
+<a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a> bridge.  Where the
+<em>Zigbee Switch</em> fuses inbound state, the on-canvas slider and the
+outbound <code>set</code> builder into one widget, this node is the
+factored <strong>read-half</strong>: it has no latch and no slider, it
+just listens for the device's reported state and forwards it as a value
+message.  Pair it with a <em>Zigbee Relay Command</em> when you want
+independent read and write branches.
+</p>
+
+<h5>Behaviour</h5>
+<p>
+Zigbee2MQTT publishes a device's full state as a JSON object on the bare
+friendly-name topic, e.g. on <code>zigbee2mqtt/livingroom_lamp</code>:
+</p>
+<pre>{ "state": "ON", "linkquality": 142, "brightness": 254 }</pre>
+<p>
+The node filters to exactly <code>zigbee2mqtt/&lt;friendly-name&gt;</code>
+(no <code>/set</code> or <code>/availability</code> suffix), reads the
+top-level <code>state</code> member, and &mdash; only for the literal
+<code>"ON"</code> / <code>"OFF"</code> values &mdash; reshapes the
+message into the canonical pipnode contract:
+</p>
+<table>
+  <tr><th>Member</th><th>Value</th></tr>
+  <tr><td><code>data.value</code></td><td><code>1.0</code> (ON) or <code>0.0</code> (OFF)</td></tr>
+  <tr><td><code>data.success</code></td><td><code>true</code></td></tr>
+  <tr><td><code>data.device</code></td><td>the configured friendly name</td></tr>
+  <tr><td><code>data.output</code></td><td><code>&lt;name&gt;: state ON</code></td></tr>
+</table>
+<p>
+The original envelope and <code>data.payload</code> (linkquality,
+brightness, &hellip;) are left intact for nodes that want the detail.
+A <code>"TOGGLE"</code> value, or a state object with no top-level
+<code>state</code> member, is dropped silently so a noise burst cannot
+synthesise a false transition.  Unlike the <em>Zigbee Switch</em>'s
+inbound path, this node <strong>does emit</strong> &mdash; it is a pure
+observer with no latch to sync, and it never rewrites the topic to a
+<code>set</code> command, so there is no feedback-loop risk.
+</p>
+
+<h5>Configuration</h5>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td>Zigbee2MQTT friendly name (e.g.
+          <code>livingroom_lamp</code>) the filter listens for, matched
+          as the exact tail of
+          <code>zigbee2mqtt/&lt;friendly-name&gt;</code>.
+          <strong>Mandatory</strong> &mdash; an empty value puts the
+          node in the red &ldquo;configuration required&rdquo; state and
+          rejects every message, since there is no sensible default
+          device to pick on the user's behalf.</td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>MQTT Source (url = tcp://mqtt.homelab.local:1883, topic = zigbee2mqtt/#)
+    &rarr; Zigbee Relay Status (friendly-name = livingroom_lamp)
+        &rarr; LED / Debug / Graph</pre>
+<p>
+Whenever Z2M reports the lamp's state &mdash; whether the change came
+from the Z2M frontend, an automation, or a <em>Zigbee Relay Command</em>
+elsewhere in the worksheet &mdash; this node forwards a value message a
+downstream indicator recognises.
+</p>
+<p>
+<strong>Z2M base topic.</strong> The default Z2M <code>base_topic</code>
+is <code>zigbee2mqtt</code>, which this node pins.  If your Z2M instance
+uses a non-default <code>base_topic</code>, adjust Z2M back to the
+default or wire the explicit, factored chain (generic filter + payload
+decoder) until a configurable-prefix variant lands.
+</p>
+
+</body>
+</html>

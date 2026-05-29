@@ -1,0 +1,213 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnZigbeeSwitch",
+      "uuid" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608",
+      "name" : "Zigbee Switch 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 220.0,
+        "y" : 140.0
+      },
+      "properties" : {
+        "on" : false,
+        "friendly-name" : "0xa4c138a4c9626802",
+        "enforce-on-startup" : true
+      }
+    },
+    {
+      "type" : "PnMqttSink",
+      "uuid" : "a047813e-2232-49c1-b6fc-6342d1f41341",
+      "name" : "MQTT Sink 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 420.0,
+        "y" : 140.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "topic-template" : "",
+        "payload" : "",
+        "retain" : false,
+        "username" : "",
+        "client-id" : "",
+        "qos" : 0
+      }
+    },
+    {
+      "type" : "PnZigbeeSource",
+      "uuid" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
+      "name" : "Zigbee Source 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 40.0,
+        "y" : 140.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "subscribe-topic" : "zigbee2mqtt/#",
+        "username" : "",
+        "client-id" : "",
+        "qos" : 0,
+        "filter-logging" : true,
+        "filter-bridge-devices" : true,
+        "filter-bridge-definitions" : true,
+        "filter-bridge-info" : true,
+        "inject-device-info" : false,
+        "inject-device-capabilities" : false
+      }
+    },
+    {
+      "type" : "PnStaircase",
+      "uuid" : "a8ec174e-06b3-40a7-8e21-6ee643e63c4e",
+      "name" : "Staircase 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 400.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "on-time-ms" : 5000,
+        "retriggerable" : true
+      }
+    },
+    {
+      "type" : "PnInject",
+      "uuid" : "d5640e30-49a0-4523-9949-c848397e0323",
+      "name" : "Injector 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 80.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "text" : "Injector activated.",
+        "value" : 1.0,
+        "success" : true,
+        "button-icon" : "system-reboot"
+      }
+    },
+    {
+      "type" : "PnLed",
+      "uuid" : "69fed874-7de0-49c9-91a0-ef2dc5ce7bb5",
+      "name" : "LED 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 567.11572265625,
+        "y" : 222.44696044921875
+      },
+      "properties" : {
+        "color" : "rgb(28,113,216)",
+        "hold-ms" : 250,
+        "mode" : "Steady (level)"
+      }
+    },
+    {
+      "type" : "PnMqttSink",
+      "uuid" : "18f47053-d3b8-42ed-89b7-003e3ba9bb5d",
+      "name" : "MQTT Sink 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 760.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "tcp://mqtt.homelab.local:1883",
+        "topic-template" : "",
+        "payload" : "",
+        "retain" : false,
+        "username" : "",
+        "client-id" : "",
+        "qos" : 0
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "8d8bb5a6-25df-4230-b71a-3d47a046722d",
+      "name" : "Debug Print 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 760.0,
+        "y" : 380.0
+      },
+      "properties" : {
+        "target" : "Standard Error",
+        "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnZigbeeRelayCommand",
+      "uuid" : "2ac4363e-2ca7-4f63-8a95-a91b543785b7",
+      "name" : "Zigbee Relay Command 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 580.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c138a4c9626802"
+      }
+    },
+    {
+      "type" : "PnZigbeeRemote",
+      "uuid" : "468beb92-afb3-4770-b402-42b113685a93",
+      "name" : "Zigbee Remote 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 220.0,
+        "y" : 220.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c138c974b825c2",
+        "action" : "emergency"
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608",
+      "target_id" : "a047813e-2232-49c1-b6fc-6342d1f41341"
+    },
+    {
+      "source_id" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
+      "target_id" : "fb9e1a42-ab9b-4878-9bc7-01bccb4ed608"
+    },
+    {
+      "source_id" : "a8ec174e-06b3-40a7-8e21-6ee643e63c4e",
+      "target_id" : "69fed874-7de0-49c9-91a0-ef2dc5ce7bb5"
+    },
+    {
+      "source_id" : "d5640e30-49a0-4523-9949-c848397e0323",
+      "target_id" : "a8ec174e-06b3-40a7-8e21-6ee643e63c4e"
+    },
+    {
+      "source_id" : "a8ec174e-06b3-40a7-8e21-6ee643e63c4e",
+      "target_id" : "2ac4363e-2ca7-4f63-8a95-a91b543785b7"
+    },
+    {
+      "source_id" : "2ac4363e-2ca7-4f63-8a95-a91b543785b7",
+      "target_id" : "18f47053-d3b8-42ed-89b7-003e3ba9bb5d"
+    },
+    {
+      "source_id" : "2ac4363e-2ca7-4f63-8a95-a91b543785b7",
+      "target_id" : "8d8bb5a6-25df-4230-b71a-3d47a046722d"
+    },
+    {
+      "source_id" : "468beb92-afb3-4770-b402-42b113685a93",
+      "target_id" : "a8ec174e-06b3-40a7-8e21-6ee643e63c4e"
+    },
+    {
+      "source_id" : "e7f0f809-d1e2-456c-a07a-e4dfc0d153d4",
+      "target_id" : "468beb92-afb3-4770-b402-42b113685a93"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}
