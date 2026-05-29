@@ -2,7 +2,8 @@
  pipnode-zigbee-plugin -- TODO
 ================================================================
 
-Plain text only; no markdown. Items are numbered sequentially.
+Plain text only; no markdown. Level-0 items are numbered
+sequentially; their sub-items are bulleted, not numbered.
 
 
 ----------------------------------------------------------------
@@ -23,22 +24,20 @@ that nodes are expected to use (all GTK-free, available headless):
     pn_node_log_info|warning|error() (pn-node.h:726-754) instead
     of stdout/stderr or silent drops.
 
-Audit (2026-05-29): Channel 2 is now done (items 1-2 below).
+Audit (2026-05-29): Channel 2 is now done (item 1 below).
 Channel 3 (logging) remains: pn-zigbee-remote.c is the only node
 that uses pn_node_log_* at all -- it calls pn_node_log_info on
 each press (:247). The rest still drop diagnostics silently.
 
-Channel 2 -- replace the hand-rolled red+glyph swap with
-pn_node_set_has_error: DONE (2026-05-29).
-
-  1. DONE. src/pn-znp-ping.c apply_visual_state now keeps the
+1. Channel 2 -- replace the hand-rolled red+glyph swap with
+   pn_node_set_has_error: DONE (2026-05-29).
+   - DONE. src/pn-znp-ping.c apply_visual_state now keeps the
      healthy magenta + radio glyph set unconditionally and toggles
      pn_node_set_has_error (node, !alive); the host paints the red
      ❗ overlay. (This also fixed a latent grey body -- the node
      had never seeded an instance colour, and pn_node_get_color()
      has no class fallback.)
-
-  2. DONE. The three zigbee swaps (pn-zigbee-switch.c,
+   - DONE. The three zigbee swaps (pn-zigbee-switch.c,
      pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
      keep magenta + toggle glyph and toggle has_error while
      unconfigured (empty friendly-name). Decision: "unconfigured"
@@ -49,24 +48,19 @@ pn_node_set_has_error: DONE (2026-05-29).
      needs no migration: its friendly-name is an optional filter,
      not a mandatory config, so it has no unconfigured-error state.)
 
-Channel 3 -- adopt pn_node_log_* for diagnostics:
-
-  3. src/pn-znp-ping.c -- highest value: emit_failure (:118) and
+2. Channel 3 -- adopt pn_node_log_* for diagnostics:
+   - src/pn-znp-ping.c -- highest value: emit_failure (:118) and
      the paths that build rich reason strings (serial open :441,
      timeout :507, write :523,537, HUP :343, g_strerror(errno)
      :366) only travel downstream; also feed them to
      pn_node_log_error.
-
-  4. src/pn-zigbee-source.c -- silent JSON-drop / fallback paths
+   - src/pn-zigbee-source.c -- silent JSON-drop / fallback paths
      (:590, :617) could log a WARNING via pn_node_log_warning.
-
-  5. src/pn-zigbee-switch.c -- silent drops in receive (:255,
+   - src/pn-zigbee-switch.c -- silent drops in receive (:255,
      :259, :263, :275) and fallback publish (:134).
-
-  6. src/pn-zigbee-relay-status.c -- silent drops in receive
+   - src/pn-zigbee-relay-status.c -- silent drops in receive
      (:181, :185, :189, :202).
-
-  7. src/pn-zigbee-relay-command.c -- silent drops in receive
+   - src/pn-zigbee-relay-command.c -- silent drops in receive
      (:152, :158).
 
 
@@ -75,16 +69,15 @@ Channel 3 -- adopt pn_node_log_* for diagnostics:
  "Zigbee Switch"
 ----------------------------------------------------------------
 
-pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
-Switch", but pn_node_get_class_name() on an instance returns
-"Switch". The PnSwitch base seeds a *per-instance* class-name
-label (the legacy override path), and the instance value shadows
-the subclass's class-level value. The other nodes derive from
-PnNode directly and are unaffected (they report their correct
-class_name). Likely surfaced by commit 5fd9ad9, which dropped the
-deprecated pn_node_set_class_name() calls from node init.
-
-  8. Decide whether the palette/inspector should show "Zigbee
+3. pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
+   Switch", but pn_node_get_class_name() on an instance returns
+   "Switch". The PnSwitch base seeds a *per-instance* class-name
+   label (the legacy override path), and the instance value shadows
+   the subclass's class-level value. The other nodes derive from
+   PnNode directly and are unaffected (they report their correct
+   class_name). Likely surfaced by commit 5fd9ad9, which dropped
+   the deprecated pn_node_set_class_name() calls from node init.
+   - Decide whether the palette/inspector should show "Zigbee
      Switch" (it should). If so, re-assert the per-instance label
      in pn_zigbee_switch_init (the supported setter), or have the
      host stop seeding an instance-level override from PnSwitch.
@@ -101,109 +94,101 @@ memory-safety or registration bugs were found; ownership of
 JsonNode / GString / PnMessage is correct throughout. The items
 below are behavioral / contract issues.
 
-success flag: switch's configured vs unconfigured paths disagree
-(minor).
-  data.success=FALSE is the section-12 downstream failure signal
-  -- i.e. "did the node do its job". These nodes only build and
-  emit a message (a downstream PnMqttSink does any actual
-  publishing; nothing touches hardware), so no property
-  combination can stop them emitting and success = TRUE is correct
-  by design. The configured paths (pn-zigbee-switch.c:156,
-  pn-zigbee-relay-command.c:190, pn-zigbee-relay-status.c:210) get
-  this right. The lone wrinkle: the base PnSwitch builder
-  overloads success to carry the latch state (success = on,
-  ../pipnode/.../pn-switch.c:124). That leaks into the Zigbee
-  switch *only* on the unconfigured fallback path
-  (pn-zigbee-switch.c:133-134), so within one node success means
-  "always true" when configured but "is-on" when not.
-
-  9. Optionally make the unconfigured fallback also stamp
+4. success flag: switch's configured vs unconfigured paths
+   disagree (minor).
+   data.success=FALSE is the section-12 downstream failure signal
+   -- i.e. "did the node do its job". These nodes only build and
+   emit a message (a downstream PnMqttSink does any actual
+   publishing; nothing touches hardware), so no property
+   combination can stop them emitting and success = TRUE is correct
+   by design. The configured paths (pn-zigbee-switch.c:156,
+   pn-zigbee-relay-command.c:190, pn-zigbee-relay-status.c:210) get
+   this right. The lone wrinkle: the base PnSwitch builder
+   overloads success to carry the latch state (success = on,
+   ../pipnode/.../pn-switch.c:124). That leaks into the Zigbee
+   switch *only* on the unconfigured fallback path
+   (pn-zigbee-switch.c:133-134), so within one node success means
+   "always true" when configured but "is-on" when not.
+   - Optionally make the unconfigured fallback also stamp
      success = TRUE for self-consistency. Low priority -- the
      unconfigured case is a misconfiguration the warning visual
      already flags, and success is correct on the path that
      matters.
 
-PnZnpPing reply timeout is effectively dead at the default
-interval.
-  src/pn-znp-ping.c:501-517, :541-556 -- the 800 ms REPLY_TIMEOUT
-  is only *checked* on the next send_ping, which is driven by the
-  poll cadence (interval, default 5 s). So a dead dongle isn't
-  reported for up to ~5 s, and with interval == 0 a never-answered
-  ping is never timed out (waiting_for_ping sticks TRUE, the node
-  never flips to its dead visual).
+5. PnZnpPing reply timeout is effectively dead at the default
+   interval.
+   src/pn-znp-ping.c:501-517, :541-556 -- the 800 ms REPLY_TIMEOUT
+   is only *checked* on the next send_ping, which is driven by the
+   poll cadence (interval, default 5 s). So a dead dongle isn't
+   reported for up to ~5 s, and with interval == 0 a never-answered
+   ping is never timed out (waiting_for_ping sticks TRUE, the node
+   never flips to its dead visual).
+   - Arm a dedicated one-shot g_timeout_add for the reply window
+     when a ping is sent, instead of piggy-backing on the poll
+     tick.
 
-  10. Arm a dedicated one-shot g_timeout_add for the reply window
-      when a ping is sent, instead of piggy-backing on the poll
-      tick.
+6. PnZnpPing IO-watch teardown double-retires the dispatching
+   source.
+   src/pn-znp-ping.c:341-348, :364-371 -- these paths call
+   close_device() (which runs g_source_remove (io_watch_id), :471)
+   on the watch that is *currently dispatching*, then return
+   G_SOURCE_REMOVE; the io_watch_id = 0 after is a dead store
+   (close_device already zeroed it). Benign under current GLib
+   (SOURCE_DESTROYED guard) but incorrect ordering.
+   - Zero io_watch_id *before* calling close_device so its
+     internal remove is skipped, and rely on the G_SOURCE_REMOVE
+     return.
 
-PnZnpPing IO-watch teardown double-retires the dispatching source.
-  src/pn-znp-ping.c:341-348, :364-371 -- these paths call
-  close_device() (which runs g_source_remove (io_watch_id), :471)
-  on the watch that is *currently dispatching*, then return
-  G_SOURCE_REMOVE; the io_watch_id = 0 after is a dead store
-  (close_device already zeroed it). Benign under current GLib
-  (SOURCE_DESTROYED guard) but incorrect ordering.
+7. PnZnpPing write_frame is not self-defensive against oversized
+   len.
+   src/pn-znp-ping.c:232 -- buf[5 + ZNP_MAX_DATA] (255 bytes) but
+   len is a guint8 up to 255, so buf[4+len] could index 259. Not
+   exploitable today (all callers pass len = 0).
+   - Add a len <= ZNP_MAX_DATA guard before a future caller
+     overflows it.
 
-  11. Zero io_watch_id *before* calling close_device so its
-      internal remove is skipped, and rely on the G_SOURCE_REMOVE
-      return.
+8. PnZnpPing full-buffer wipe can drop an in-progress frame.
+   src/pn-znp-ping.c:353-354 -- when the 1 KB rx buffer fills with
+   no parseable SOF it silently resets everything, including a
+   legitimate partial frame. Low impact (max frame is 255 B).
+   - Consider discarding only up to the last SOF rather than the
+     whole buffer.
 
-PnZnpPing write_frame is not self-defensive against oversized len.
-  src/pn-znp-ping.c:232 -- buf[5 + ZNP_MAX_DATA] (255 bytes) but
-  len is a guint8 up to 255, so buf[4+len] could index 259. Not
-  exploitable today (all callers pass len = 0).
+9. PnZigbeeSource: malformed/empty bridge/devices is dropped and
+   leaves a stale cache.
+   src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
+   momentarily-[] inventory publish is swallowed (default
+   filter_bridge_devices=TRUE), the device cache is not refreshed,
+   and nothing is logged; the node then runs on stale device info
+   invisibly. (Deeper than the section-12 logging item for :590.)
+   - Log a warning on the not-an-array / empty case, and consider
+     keeping the previous cache when the new array is empty.
 
-  12. Add a len <= ZNP_MAX_DATA guard before a future caller
-      overflows it.
+10. Boolean Z2M state is silently dropped (switch & relay nodes).
+    src/pn-zigbee-relay-command.c:116-122,
+    src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
+    value/state readers accept only string / int64 / double, so Z2M
+    endpoints that express "state": true as a JSON boolean are
+    ignored. Consistent across the three, so a gap rather than a
+    divergence.
+    - Optionally accept G_TYPE_BOOLEAN for state / value.
 
-PnZnpPing full-buffer wipe can drop an in-progress frame.
-  src/pn-znp-ping.c:353-354 -- when the 1 KB rx buffer fills with
-  no parseable SOF it silently resets everything, including a
-  legitimate partial frame. Low impact (max frame is 255 B).
-
-  13. Consider discarding only up to the last SOF rather than the
-      whole buffer.
-
-PnZigbeeSource: malformed/empty bridge/devices is dropped and
-leaves a stale cache.
-  src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
-  momentarily-[] inventory publish is swallowed (default
-  filter_bridge_devices=TRUE), the device cache is not refreshed,
-  and nothing is logged; the node then runs on stale device info
-  invisibly. (Deeper than the section-12 logging item for :590.)
-
-  14. Log a warning on the not-an-array / empty case, and consider
-      keeping the previous cache when the new array is empty.
-
-Boolean Z2M state is silently dropped (switch & relay nodes).
-  src/pn-zigbee-relay-command.c:116-122,
-  src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
-  value/state readers accept only string / int64 / double, so Z2M
-  endpoints that express "state": true as a JSON boolean are
-  ignored. Consistent across the three, so a gap rather than a
-  divergence.
-
-  15. Optionally accept G_TYPE_BOOLEAN for state / value.
-
-PnZigbeeRelayStatus leaves the live device state topic on its
-emitted message.
-  src/pn-zigbee-relay-status.c:204-218 -- never calls
-  pn_message_set_topic, unlike relay-command which rewrites it
-  (:166-168). Wiring relay-status to an MQTT Sink that republishes
-  on the inbound topic would echo onto the device's state topic.
-  Latent foot-gun.
-
-  16. Clear the topic on the emitted message, or document why it's
+11. PnZigbeeRelayStatus leaves the live device state topic on its
+    emitted message.
+    src/pn-zigbee-relay-status.c:204-218 -- never calls
+    pn_message_set_topic, unlike relay-command which rewrites it
+    (:166-168). Wiring relay-status to an MQTT Sink that republishes
+    on the inbound topic would echo onto the device's state topic.
+    Latent foot-gun.
+    - Clear the topic on the emitted message, or document why it's
       left intact.
 
-Test-coverage gaps (not bugs).
-
-  17. PnZigbeeSource has zero unit tests -- its Z2M filter/inject
+12. Test-coverage gaps (not bugs).
+    - PnZigbeeSource has zero unit tests -- its Z2M filter/inject
       logic (the most complex code in the plugin) is uncovered
       because constructing it auto-connects libmosquitto
       off-thread. Worth an integration test against a throwaway
       broker.
-
-  18. PnZnpPing frame/FCS codec is never exercised --
+    - PnZnpPing frame/FCS codec is never exercised --
       test-znp-ping.c only checks metadata/defaults; the static
       UNPI parser is untested.
