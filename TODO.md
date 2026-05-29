@@ -49,3 +49,20 @@ only one that uses `pn_node_log_*` at all.
 
 `pn-zigbee-remote.c` already uses `pn_node_log_info` on each press (`:247`);
 only outstanding item there is the Channel-2 `set_has_error` adoption.
+
+## PnZigbeeSwitch reports class_name "Switch" instead of "Zigbee Switch"
+
+`pn-zigbee-switch.c:405` pins `node_class->class_name = "Zigbee Switch"`, but
+`pn_node_get_class_name()` on an instance returns `"Switch"`. The `PnSwitch`
+base seeds a *per-instance* class-name label (the legacy override path), and
+the instance value shadows the subclass's class-level value. The other nodes
+derive from `PnNode` directly and are unaffected (they report their correct
+class_name). Likely surfaced by commit 5fd9ad9, which dropped the deprecated
+`pn_node_set_class_name()` calls from node init.
+
+- [ ] Decide whether the palette/inspector should show "Zigbee Switch" (it
+      should). If so, re-assert the per-instance label in
+      `pn_zigbee_switch_init` (the supported setter), or have the host stop
+      seeding an instance-level override from `PnSwitch`. Caught by
+      `tests/test-zigbee-switch.c` (which currently does not assert class_name
+      for this reason).
