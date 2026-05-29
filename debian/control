@@ -1,0 +1,28 @@
+Source: pipnode-zigbee-plugin
+Section: devel
+Priority: optional
+Maintainer: Laszlo Pere <laszlopere@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               libpipnode-dev (>= 0.2.0),
+               libglib2.0-dev (>= 2.40),
+               libjson-glib-dev (>= 1.0),
+               libsoup-3.0-dev (>= 3.0),
+               libgdk-pixbuf-2.0-dev (>= 2.36),
+               pkg-config
+Standards-Version: 4.6.2
+Homepage: https://github.com/laszlopere/pipnode-zigbee-plugin
+Rules-Requires-Root: no
+
+Package: pipnode-zigbee-plugin
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Enhances: pipnode-run, pipnode-editor
+Description: pipnode Zigbee control/query nodes (headless)
+ Out-of-tree plugin for the pipnode visual dataflow environment, adding
+ nodes that drive Zigbee devices through a Zigbee2MQTT instance over
+ MQTT.
+ .
+ The module is GTK-free: it links libpipnode-core only and is picked up
+ by both the headless runner (pipnode-run) and the editor. Ships the
+ PnZigbeeSource, PnZigbeeSwitch and PnZnpPing nodes, their per-node HTML
+ help pages, and example worksheets under the editor's "zigbee" category.

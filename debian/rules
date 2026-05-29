@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	# Stage into debian/tmp and let the .install file pick what ships,
+	# so dh_missing --fail-missing can flag anything we forgot.
+	dh_auto_install --destdir=debian/tmp
+	# .la files are useless on Debian and lintian complains.
+	find debian/tmp -name '*.la' -delete
+	# This is a loadable module (disable-static); ship no archives.
+	find debian/tmp -name '*.a' -delete
+
+override_dh_missing:
+	dh_missing --fail-missing

@@ -1,0 +1,26 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: pipnode-zigbee-plugin
+Upstream-Contact: Laszlo Pere <laszlopere@gmail.com>
+Source: https://github.com/laszlopere/pipnode-zigbee-plugin
+
+Files: *
+Copyright: 2026 Laszlo Pere <laszlopere@gmail.com>
+License: proprietary
+ This software and its source code are proprietary and confidential. No
+ license, express or implied, is granted to copy, modify, merge, publish,
+ distribute, sublicense, or sell copies of this software, in whole or in
+ part, without the prior written permission of the copyright holder.
+ .
+ This plugin links the Pipnode host library solely through Pipnode's
+ documented plugin interface. Pipnode's LICENSE.PLUGIN-EXCEPTION (an
+ additional permission under GPL v3 section 7) permits such a plugin to be
+ distributed under any license, including this proprietary one. This
+ license governs this plugin's own source and binaries only; it does not
+ relicense Pipnode itself, which remains under the GNU GPL v3 or later.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+ NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

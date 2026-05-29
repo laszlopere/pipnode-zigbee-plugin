@@ -30,6 +30,18 @@ Makefile.in
 /*.tar.gz
 /pipnode-zigbee-plugin-*/
 
+# Debian packaging build artifacts (debian/ source files are tracked;
+# everything dh* writes into debian/ on a build is not).
+/debian/.debhelper/
+/debian/autoreconf.*
+/debian/debhelper-build-stamp
+/debian/files
+/debian/tmp/
+/debian/*.debhelper
+/debian/*.debhelper.log
+/debian/*.substvars
+/debian/pipnode-zigbee-plugin/
+
 # clangd / tooling
 /compile_commands.json
 .cache/
