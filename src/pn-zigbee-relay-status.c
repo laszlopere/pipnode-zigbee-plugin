@@ -29,11 +29,11 @@
 
 /* fa-toggle-on U+F205 -- same glyph the #PnZigbeeSwitch and the host's
  * PnSwitch base use, since this is the read-half of that same role.
- * Swapped to the warning ❗ glyph (U+2757) while the friendly-name field
- * is empty, matching the convention #PnZigbeeSwitch / #PnInject use to
- * flag a node that needs configuration before it can do anything. */
+ * While the friendly-name field is empty the node flags itself via the
+ * host's has-error overlay (red body + ❗), matching the convention
+ * #PnZigbeeSwitch / #PnInject use to flag a node that needs
+ * configuration before it can do anything -- see PLUGINS §12. */
 #define PN_ZIGBEE_RELAY_STATUS_ICON         "\xef\x88\x85"
-#define PN_ZIGBEE_RELAY_STATUS_WARNING_ICON "\xe2\x9d\x97"
 
 struct _PnZigbeeRelayStatus
 {
@@ -63,29 +63,22 @@ static GParamSpec *props[N_PROPS];
 /*  Visual state                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Magenta + toggle glyph when the friendly-name field is set (matches
- *  the rest of the Zigbee palette), red + ❗ glyph when not.  Paints the
- *  *instance* icon/color, which is what the worksheet body reads (the
- *  class fields only seed the palette entry). */
+/** Keeps the Zigbee identity (magenta + toggle glyph, matching the rest
+ *  of the palette) set unconditionally on the *instance* -- which is
+ *  what the worksheet body reads -- and toggles the host's has-error
+ *  overlay (red body + ❗) while the friendly-name field is empty, the
+ *  way PLUGINS §12 prescribes. */
 static void
 apply_visual_state (
         PnZigbeeRelayStatus *self,
         gboolean             configured)
 {
     PnNode *node = PN_NODE (self);
+    PnColor magenta = { 0.78, 0.27, 0.60, 1.0 };
 
-    if (configured)
-    {
-        PnColor magenta = { 0.78, 0.27, 0.60, 1.0 };
-        pn_node_set_color (node, &magenta);
-        pn_node_set_icon  (node, PN_ZIGBEE_RELAY_STATUS_ICON);
-    }
-    else
-    {
-        PnColor red = { 0.86, 0.30, 0.28, 1.0 };
-        pn_node_set_color (node, &red);
-        pn_node_set_icon  (node, PN_ZIGBEE_RELAY_STATUS_WARNING_ICON);
-    }
+    pn_node_set_color (node, &magenta);
+    pn_node_set_icon  (node, PN_ZIGBEE_RELAY_STATUS_ICON);
+    pn_node_set_has_error (node, !configured);
 
     pn_node_request_repaint (node);
 }

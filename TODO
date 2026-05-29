@@ -23,32 +23,31 @@ that nodes are expected to use (all GTK-free, available headless):
     pn_node_log_info|warning|error() (pn-node.h:726-754) instead
     of stdout/stderr or silent drops.
 
-Audit (2026-05-29): no node is fully migrated. pn-zigbee-remote.c
-is the only one that uses pn_node_log_* at all. It already calls
-pn_node_log_info on each press (:247); its only outstanding item
-is the Channel-2 set_has_error adoption (item 2 below).
+Audit (2026-05-29): Channel 2 is now done (items 1-2 below).
+Channel 3 (logging) remains: pn-zigbee-remote.c is the only node
+that uses pn_node_log_* at all -- it calls pn_node_log_info on
+each press (:247). The rest still drop diagnostics silently.
 
 Channel 2 -- replace the hand-rolled red+glyph swap with
-pn_node_set_has_error:
+pn_node_set_has_error: DONE (2026-05-29).
 
-  1. src/pn-znp-ping.c:108-110 -- apply_visual_state swaps the
-     warning glyph via pn_node_set_icon. The dead state is an
-     unambiguous transient runtime failure, so this is a clear
-     migration: pn_node_set_has_error (node, !alive).
-     (Callers/seed: :343-344, :366-367, :443, :508, :724.)
+  1. DONE. src/pn-znp-ping.c apply_visual_state now keeps the
+     healthy magenta + radio glyph set unconditionally and toggles
+     pn_node_set_has_error (node, !alive); the host paints the red
+     ❗ overlay. (This also fixed a latent grey body -- the node
+     had never seeded an instance colour, and pn_node_get_color()
+     has no class fallback.)
 
-  2. src/pn-zigbee-switch.c:93-95 -- apply_visual_state red+glyph
-     branch.
-     src/pn-zigbee-relay-status.c:85-87 -- same pattern.
-     src/pn-zigbee-relay-command.c:83-85 -- same pattern (and this
-     node fires physical relays with no error indication on
-     failure).
-     Note: these four zigbee swaps signal *unconfigured* (empty
-     friendly-name), not transient runtime errors. Section 12's
-     set_has_error is framed as transient error state, so
-     migrating them is a judgment call -- decide whether
-     "unconfigured" should count as node error before touching
-     them.
+  2. DONE. The three zigbee swaps (pn-zigbee-switch.c,
+     pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
+     keep magenta + toggle glyph and toggle has_error while
+     unconfigured (empty friendly-name). Decision: "unconfigured"
+     does count as a node-error state -- has_error is purely visual
+     in the host (no error aggregation / downstream side effect),
+     so the outcome is the identical red ❗ while complying with
+     section 12's ban on hand-rolled swaps. (pn-zigbee-remote.c
+     needs no migration: its friendly-name is an optional filter,
+     not a mandatory config, so it has no unconfigured-error state.)
 
 Channel 3 -- adopt pn_node_log_* for diagnostics:
 

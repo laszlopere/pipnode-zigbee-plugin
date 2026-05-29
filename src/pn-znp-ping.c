@@ -44,10 +44,10 @@
 #define ZNP_SYS_PING         0x01
 #define ZNP_SYS_VERSION      0x02
 
-/* Visual: FA4.7 fa-feed U+F09E (broadcast/radio).  Warning glyph
- * borrowed from the Meshtastic node for consistency. */
+/* Visual: FA4.7 fa-feed U+F09E (broadcast/radio).  The dead state is
+ * flagged with the host's generic has-error overlay (red body + ❗),
+ * not a hand-rolled icon swap -- see PLUGINS §12. */
 #define PN_ZNP_PING_NORMAL_ICON  "\xef\x82\x9e"  /* U+F09E */
-#define PN_ZNP_PING_WARNING_ICON "\xe2\x9d\x97"  /* U+2757 */
 
 #define PN_ZNP_PING_DEFAULT_DEVICE   "/dev/ttyUSB0"
 #define PN_ZNP_PING_DEFAULT_INTERVAL 5u
@@ -103,11 +103,19 @@ static void send_version  (PnZnpPing *self);
 static void
 apply_visual_state (PnZnpPing *self, gboolean alive)
 {
-    PnNode *node = PN_NODE (self);
+    PnNode  *node    = PN_NODE (self);
+    PnColor  magenta = { 0.78, 0.27, 0.60, 1.0 };
+
     self->last_alive = alive;
-    pn_node_set_icon (node,
-                      alive ? PN_ZNP_PING_NORMAL_ICON
-                            : PN_ZNP_PING_WARNING_ICON);
+
+    /* Keep the healthy Zigbee identity (magenta + radio glyph) set
+     * unconditionally; the host paints the red ❗ overlay while
+     * has-error is set, so a dead dongle needs no swap of our own
+     * (PLUGINS §12).  Seeding both here also gives the instance a
+     * non-grey body -- pn_node_get_color() has no class fallback. */
+    pn_node_set_color (node, &magenta);
+    pn_node_set_icon  (node, PN_ZNP_PING_NORMAL_ICON);
+    pn_node_set_has_error (node, !alive);
 }
 
 /* ------------------------------------------------------------------ */

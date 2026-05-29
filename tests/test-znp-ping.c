@@ -19,7 +19,7 @@
 #include "pn-test.h"
 #include "pn-znp-ping.h"
 
-#define WARNING_ICON "\xe2\x9d\x97"  /* U+2757, the "liveness unconfirmed" glyph */
+#define NORMAL_ICON "\xef\x82\x9e"  /* U+F09E, the healthy radio glyph */
 
 static void
 test_metadata (void)
@@ -50,8 +50,10 @@ test_defaults (void)
     CHECK_STR_EQ (device, "/dev/ttyUSB0");
     CHECK_INT_EQ (interval, 5);
     /* A fresh probe has not yet confirmed the dongle is alive, so it
-     * seeds the warning glyph; a successful PING later clears it. */
-    CHECK_STR_EQ (pn_node_get_icon (node), WARNING_ICON);
+     * raises the host error overlay (red ❗); the node keeps its healthy
+     * radio glyph, and a successful PING later clears the error. */
+    CHECK (pn_node_get_has_error (node));
+    CHECK_STR_EQ (pn_node_get_icon (node), NORMAL_ICON);
 
     g_free (device);
     g_object_unref (node);

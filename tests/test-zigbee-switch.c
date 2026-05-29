@@ -14,7 +14,7 @@
 #include <pn-switch.h>
 #include <json-glib/json-glib.h>
 
-#define WARNING_ICON "\xe2\x9d\x97"   /* U+2757, the "unconfigured" glyph */
+#define TOGGLE_ICON "\xef\x88\x85"   /* U+F205, the node's healthy glyph */
 
 static PnMessage *
 state_publish (const char *topic, const char *state)
@@ -140,9 +140,16 @@ test_visual_state (void)
 {
     PnNode *node = PN_NODE (pn_zigbee_switch_new ());
 
-    CHECK_STR_EQ (pn_node_get_icon (node), WARNING_ICON);
+    /* Unconfigured: the node raises the host error overlay (red ❗)
+     * rather than swapping its own icon, which stays the healthy
+     * toggle glyph (PLUGINS §12). */
+    CHECK (pn_node_get_has_error (node));
+    CHECK_STR_EQ (pn_node_get_icon (node), TOGGLE_ICON);
+
+    /* Setting a target clears the error; the icon never changed. */
     g_object_set (node, "friendly-name", "lamp", NULL);
-    CHECK_FALSE (g_strcmp0 (pn_node_get_icon (node), WARNING_ICON) == 0);
+    CHECK_FALSE (pn_node_get_has_error (node));
+    CHECK_STR_EQ (pn_node_get_icon (node), TOGGLE_ICON);
 
     CHECK (pn_node_get_has_input (node));
     CHECK (pn_node_get_has_output (node));

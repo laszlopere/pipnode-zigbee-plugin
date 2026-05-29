@@ -12,7 +12,7 @@
 
 #include <json-glib/json-glib.h>
 
-#define WARNING_ICON "\xe2\x9d\x97"   /* U+2757, the "unconfigured" glyph */
+#define TOGGLE_ICON "\xef\x88\x85"   /* U+F205, the node's healthy glyph */
 
 /* Build a Z2M-style state publish: topic + structured data.payload
  * carrying a string `state` member, the shape the node decodes. */
@@ -178,12 +178,15 @@ test_visual_state (void)
 {
     PnNode *node = PN_NODE (pn_zigbee_relay_status_new ());
 
-    /* Fresh, unconfigured node nags with the warning glyph. */
-    CHECK_STR_EQ (pn_node_get_icon (node), WARNING_ICON);
+    /* Fresh, unconfigured node nags via the host error overlay (red ❗);
+     * its own icon stays the healthy toggle glyph (PLUGINS §12). */
+    CHECK (pn_node_get_has_error (node));
+    CHECK_STR_EQ (pn_node_get_icon (node), TOGGLE_ICON);
 
-    /* Once a target is set it drops the warning. */
+    /* Once a target is set it clears the error; the icon is unchanged. */
     g_object_set (node, "friendly-name", "lamp", NULL);
-    CHECK_FALSE (g_strcmp0 (pn_node_get_icon (node), WARNING_ICON) == 0);
+    CHECK_FALSE (pn_node_get_has_error (node));
+    CHECK_STR_EQ (pn_node_get_icon (node), TOGGLE_ICON);
 
     /* Metadata: a read+forward node has both ports. */
     CHECK (pn_node_get_has_input (node));

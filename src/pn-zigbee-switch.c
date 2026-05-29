@@ -32,12 +32,11 @@
 
 /* fa-toggle-on U+F205 -- same glyph the host's PnSwitch base and the
  * Tasmota switch use, since this is the same role on a different
- * transport.  Swapped to the warning ❗ glyph (U+2757) while the
- * friendly-name field is empty, matching the convention #PnZnpPing
- * and #PnInject use to flag a node that needs configuration before it
- * can do anything useful. */
+ * transport.  While the friendly-name field is empty the node flags
+ * itself via the host's has-error overlay (red body + ❗), the way
+ * #PnZnpPing and #PnInject mark a node that needs configuration
+ * before it can do anything useful -- see PLUGINS §12. */
 #define PN_ZIGBEE_SWITCH_ICON         "\xef\x88\x85"
-#define PN_ZIGBEE_SWITCH_WARNING_ICON "\xe2\x9d\x97"
 
 struct _PnZigbeeSwitch
 {
@@ -68,32 +67,26 @@ static GParamSpec *props[N_PROPS];
 /*  Visual state                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Override of the base #PnSwitch vfunc.  Magenta + toggle glyph when
- *  the friendly-name field is set (matches the rest of the Zigbee
- *  palette established by #PnZnpPing), red + ❗ glyph when not.
- *  Repaint is still needed for the slider widget to redraw against
- *  the new colour, so we keep the base contract (icon + repaint). */
+/** Override of the base #PnSwitch vfunc.  Keeps the Zigbee identity
+ *  (magenta + toggle glyph, matching the palette established by
+ *  #PnZnpPing) set unconditionally and toggles the host's has-error
+ *  overlay (red body + ❗) while the friendly-name field is empty, the
+ *  way PLUGINS §12 prescribes -- no hand-rolled colour/icon swap.
+ *  Repaint is still needed for the slider widget to redraw, so we keep
+ *  the base contract. */
 static void
 pn_zigbee_switch_apply_visual_state (PnSwitch *base)
 {
     PnZigbeeSwitch *self = PN_ZIGBEE_SWITCH (base);
     PnNode         *node = PN_NODE (self);
+    PnColor         magenta = { 0.78, 0.27, 0.60, 1.0 };
     gboolean        configured;
 
     configured = (self->friendly_name != NULL && *self->friendly_name != '\0');
 
-    if (configured)
-    {
-        PnColor magenta = { 0.78, 0.27, 0.60, 1.0 };
-        pn_node_set_color (node, &magenta);
-        pn_node_set_icon  (node, PN_ZIGBEE_SWITCH_ICON);
-    }
-    else
-    {
-        PnColor red = { 0.86, 0.30, 0.28, 1.0 };
-        pn_node_set_color (node, &red);
-        pn_node_set_icon  (node, PN_ZIGBEE_SWITCH_WARNING_ICON);
-    }
+    pn_node_set_color (node, &magenta);
+    pn_node_set_icon  (node, PN_ZIGBEE_SWITCH_ICON);
+    pn_node_set_has_error (node, !configured);
 
     pn_node_request_repaint (node);
 }
