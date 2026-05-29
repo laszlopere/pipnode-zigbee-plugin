@@ -64,11 +64,21 @@
  * Caching both as separate objects lets injection union them at
  * splice time based on the live property flags, so toggling either
  * property at runtime takes effect on the next publish without
- * rebuilding the cache or re-traversing the source definition. */
+ * rebuilding the cache or re-traversing the source definition.
+ *
+ *   `category`     -- the same synthesised one-word category that is
+ *                     embedded in `capabilities`, kept here as a
+ *                     standalone borrowed pointer (a static literal
+ *                     from synthesize_category(), not owned) so the
+ *                     smart-summary path can read the device type
+ *                     unconditionally -- the `capabilities` copy is
+ *                     gated behind inject-device-capabilities and may
+ *                     not have been built. */
 typedef struct
 {
-    JsonNode *info;
-    JsonNode *capabilities;
+    JsonNode    *info;
+    JsonNode    *capabilities;
+    const gchar *category;
 } ZigbeeCachedDevice;
 
 struct _PnZigbeeSource
@@ -88,8 +98,9 @@ struct _PnZigbeeSource
      * consuming them internally.  Unlike `bridge/logging` -- which is
      * cheap to drop early in accept_topic because the node never needs
      * to look at it -- these three carry data the node itself wants
-     * (devices feeds the device-info cache, and definitions/info may
-     * grow internal consumers later), so the filter has to live on the
+     * (devices feeds both the device-info cache and the raw `devices`
+     * snapshot, definitions feeds the raw `definitions` snapshot; info
+     * still has no internal consumer), so the filter has to live on the
      * main-thread late hook: parse first, consume internally, then
      * suppress the downstream emit by returning FALSE from
      * process_message.  Main-thread only, like the inject_* flags. */
@@ -121,6 +132,28 @@ struct _PnZigbeeSource
      * reconnect, so the cache stays in sync without a separate
      * invalidation path. */
     GHashTable *device_info;
+
+    /* Verbatim snapshots of the two retained bridge inventory topics,
+     * deep-copied from each publish's `payload` (the node handed back by
+     * pn_message_get_member is borrowed -- owned by the message and
+     * freed when process_message returns -- so we keep our own copy,
+     * the same retain-by-copy discipline the device_info cache uses).
+     *
+     * Kept in full because device_info is a lossy curated projection of
+     * bridge/devices: it holds the identity scalars plus a handful of
+     * definition fields and drops endpoints / bindings / clusters /
+     * configured_reportings / interview state / the supported & disabled
+     * flags / icon / the device-level description, and is keyed by
+     * friendly_name so unnamed entries fall out.  These raw nodes are
+     * therefore the canonical copy any future subsystem reads.
+     *
+     * `bridge/info` is deliberately NOT retained: its payload is bulky
+     * and carried nothing the node needed.  %NULL until the first
+     * publish of each topic arrives (both are retained on the broker,
+     * so normally right after subscribe).  Refreshed wholesale on every
+     * receipt; main-thread only, like the cache. */
+    JsonNode *devices;
+    JsonNode *definitions;
 };
 
 G_DEFINE_TYPE (PnZigbeeSource, pn_zigbee_source, PN_TYPE_MQTT)
@@ -301,6 +334,70 @@ peek_string_member (
     if (json_node_get_value_type (n) != G_TYPE_STRING)
         return NULL;
     return json_node_get_string (n);
+}
+
+/** Read a boolean member @key off @obj into @out.  Returns %TRUE only
+ *  when the member is present and a JSON boolean, leaving @out untouched
+ *  otherwise -- so a device that simply lacks the field is told apart
+ *  from one reporting it as false (the same contract the water-leak node
+ *  relies on). */
+static gboolean
+peek_boolean_member (
+        JsonObject  *obj,
+        const gchar *key,
+        gboolean    *out)
+{
+    JsonNode *n;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return FALSE;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_VALUE (n))
+        return FALSE;
+    if (json_node_get_value_type (n) != G_TYPE_BOOLEAN)
+        return FALSE;
+    *out = json_node_get_boolean (n);
+    return TRUE;
+}
+
+/** Read a numeric member @key off @obj into @out.  Accepts both INT64
+ *  and DOUBLE storage (Z2M numbers vary by converter), returning %TRUE
+ *  only when present and numeric.  Used for temperature / humidity /
+ *  cover position readouts. */
+static gboolean
+peek_double_member (
+        JsonObject  *obj,
+        const gchar *key,
+        gdouble     *out)
+{
+    JsonNode *n;
+    GType     t;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return FALSE;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_VALUE (n))
+        return FALSE;
+    t = json_node_get_value_type (n);
+    if (t != G_TYPE_INT64 && t != G_TYPE_DOUBLE)
+        return FALSE;
+    *out = json_node_get_double (n);
+    return TRUE;
+}
+
+/** Borrow @message's `data.payload` as a #JsonObject, or %NULL when the
+ *  payload is absent or not an object (Z2M occasionally publishes bare
+ *  strings -- availability, etc.).  Mirrors the helper the leaf zigbee
+ *  nodes use. */
+static JsonObject *
+get_payload_object (PnMessage *message)
+{
+    JsonNode *payload_node;
+
+    payload_node = pn_message_get_member (message, "payload");
+    if (payload_node == NULL || !JSON_NODE_HOLDS_OBJECT (payload_node))
+        return NULL;
+    return json_node_get_object (payload_node);
 }
 
 /** Recursive predicate: does any expose (or any of its nested
@@ -540,6 +637,11 @@ build_cached_device (JsonObject *device)
     out->capabilities = json_node_new (JSON_NODE_OBJECT);
     json_node_take_object (out->capabilities, caps_obj);
 
+    /* Standalone copy of the category (a static literal -- no ownership)
+     * so the smart summary can read the device type without depending on
+     * the capabilities block having been requested. */
+    out->category = synthesize_category (device, def);
+
     return out;
 }
 
@@ -570,6 +672,49 @@ merge_object_members (
             json_object_set_member (dst, key, json_node_copy (val));
     }
     g_list_free (members);
+}
+
+/** Deep-copy a retained bridge payload onto the node, replacing any
+ *  previous snapshot.  The `payload` node returned by
+ *  pn_message_get_member is borrowed -- owned by the message, valid only
+ *  until process_message returns -- so we keep our own deep copy
+ *  (json_node_copy is a genuine deep copy here; a later downstream
+ *  rewrite of the forwarded message cannot leak back into the snapshot).
+ *
+ *  A wrong-shaped payload is logged and the previous snapshot kept,
+ *  mirroring rebuild_device_cache's malformed-publish handling (PLUGINS
+ *  §12, channel 3): a momentary garbage publish must not blank a good
+ *  inventory.  @want_array selects the expected top-level shape
+ *  (bridge/devices is an array, bridge/definitions an object). */
+static void
+retain_bridge_payload (
+        PnZigbeeSource *self,
+        JsonNode      **slot,
+        PnMessage      *message,
+        gboolean        want_array,
+        const gchar    *what)
+{
+    JsonNode *payload_node = pn_message_get_member (message, "payload");
+    gboolean  ok;
+
+    if (payload_node == NULL)
+        ok = FALSE;
+    else if (want_array)
+        ok = JSON_NODE_HOLDS_ARRAY (payload_node);
+    else
+        ok = JSON_NODE_HOLDS_OBJECT (payload_node);
+
+    if (!ok)
+    {
+        pn_node_log_warning (PN_NODE (self),
+                             "bridge/%s payload has unexpected shape; "
+                             "ignoring (retained snapshot unchanged)",
+                             what);
+        return;
+    }
+
+    g_clear_pointer (slot, json_node_unref);
+    *slot = json_node_copy (payload_node);
 }
 
 /** Drain the bridge/devices payload (a top-level JSON array of device
@@ -724,7 +869,166 @@ inject_device_info_block (
     json_object_set_member (payload_obj, "device", device_node);
 }
 
-/** Override of #PnMqttClass::process_message.  Two responsibilities:
+/* ------------------------------------------------------------------ */
+/*  Smart summary                                                      */
+/* ------------------------------------------------------------------ */
+
+/** Map an ON/OFF-style `state` string onto the on/off sentence for a
+ *  device @category.  Returns %NULL when @state is not the literal
+ *  "ON"/"OFF" (case-insensitive) so the caller can fall through to
+ *  other probes; the noun is chosen from the category, defaulting to a
+ *  neutral "Device" when the category is unknown. */
+static gchar *
+state_onoff_summary (
+        const gchar *category,
+        const gchar *state)
+{
+    gboolean     on;
+    const gchar *noun;
+
+    if (g_ascii_strcasecmp (state, "ON") == 0)
+        on = TRUE;
+    else if (g_ascii_strcasecmp (state, "OFF") == 0)
+        on = FALSE;
+    else
+        return NULL;
+
+    if (g_strcmp0 (category, "plug") == 0)        noun = "Power socket";
+    else if (g_strcmp0 (category, "switch") == 0) noun = "Switch";
+    else if (g_strcmp0 (category, "light") == 0)  noun = "Light";
+    else if (g_strcmp0 (category, "fan") == 0)    noun = "Fan";
+    else                                          noun = "Device";
+
+    return g_strdup_printf ("%s is %s.", noun, on ? "on" : "off");
+}
+
+/** Build a short, plain-language sentence describing the most important
+ *  fact in @payload, given the device's synthesised @category (may be
+ *  %NULL when the device is not yet in the cache).  Returns a freshly
+ *  allocated string the caller frees, or %NULL when nothing in the
+ *  payload is recognised (the caller then supplies a generic fallback).
+ *
+ *  Field-name probes that are unambiguous on their own (water_leak,
+ *  smoke, occupancy, ...) come first, so they work even without a
+ *  category; the category only disambiguates the generic `state` ON/OFF
+ *  noun (plug vs switch vs light vs fan) and selects the lock / cover /
+ *  climate readouts.  The node intentionally keeps no state -- this is a
+ *  pure function of the current publish plus the cached type. */
+static gchar *
+build_state_summary (
+        const gchar *category,
+        JsonObject  *payload)
+{
+    const gchar *s;
+    gboolean     b;
+    gdouble      d;
+
+    if (payload == NULL)
+        return NULL;
+
+    /* Unambiguous binary sensors, keyed by field name. */
+    if (peek_boolean_member (payload, "water_leak", &b))
+        return g_strdup (b ? "Water leak is detected." : "No water leak.");
+    if (peek_boolean_member (payload, "smoke", &b))
+        return g_strdup (b ? "Smoke is detected." : "No smoke.");
+    if (peek_boolean_member (payload, "gas", &b))
+        return g_strdup (b ? "Gas is detected." : "No gas.");
+    if (peek_boolean_member (payload, "carbon_monoxide", &b))
+        return g_strdup (b ? "Carbon monoxide is detected."
+                           : "No carbon monoxide.");
+    if (peek_boolean_member (payload, "occupancy", &b))
+        return g_strdup (b ? "Motion is detected." : "No motion.");
+    if (peek_boolean_member (payload, "vibration", &b))
+        return g_strdup (b ? "Vibration is detected." : "No vibration.");
+    if (peek_boolean_member (payload, "contact", &b))
+        /* Z2M convention: contact == true means the reed switch is closed. */
+        return g_strdup (b ? "Contact is closed." : "Contact is open.");
+
+    /* Remote button press. */
+    s = peek_string_member (payload, "action");
+    if (s != NULL && *s != '\0')
+        return g_strdup_printf ("Button pressed: %s.", s);
+
+    /* Lock: prefer the LOCK/UNLOCK command state, fall back to the
+     * descriptive lock_state. */
+    if (g_strcmp0 (category, "lock") == 0)
+    {
+        s = peek_string_member (payload, "state");
+        if (s != NULL)
+        {
+            if (g_ascii_strcasecmp (s, "LOCK") == 0)
+                return g_strdup ("Lock is locked.");
+            if (g_ascii_strcasecmp (s, "UNLOCK") == 0)
+                return g_strdup ("Lock is unlocked.");
+        }
+        s = peek_string_member (payload, "lock_state");
+        if (s != NULL)
+            return g_strdup_printf ("Lock is %s.",
+                    g_strcmp0 (s, "locked") == 0 ? "locked" : "unlocked");
+    }
+
+    /* Cover: position wins (it carries the open percentage), else the
+     * OPEN/CLOSE state. */
+    if (g_strcmp0 (category, "cover") == 0)
+    {
+        if (peek_double_member (payload, "position", &d))
+        {
+            if (d <= 0.0)
+                return g_strdup ("Cover is closed.");
+            return g_strdup_printf ("Cover is open (%d%%).", (gint) (d + 0.5));
+        }
+        s = peek_string_member (payload, "state");
+        if (s != NULL)
+        {
+            if (g_ascii_strcasecmp (s, "OPEN") == 0)
+                return g_strdup ("Cover is open.");
+            if (g_ascii_strcasecmp (s, "CLOSE") == 0)
+                return g_strdup ("Cover is closed.");
+        }
+    }
+
+    /* Generic on/off (plug / switch / light / fan, or category-less). */
+    s = peek_string_member (payload, "state");
+    if (s != NULL)
+    {
+        gchar *out = state_onoff_summary (category, s);
+        if (out != NULL)
+            return out;
+    }
+
+    /* Numeric environment readouts.  "\xc2\xb0" is a UTF-8 degree sign,
+     * split from the trailing "C" so the hex escape does not swallow it. */
+    if (g_strcmp0 (category, "climate") == 0 &&
+        peek_double_member (payload, "local_temperature", &d))
+        return g_strdup_printf ("Temperature is %.1f\xc2\xb0" "C.", d);
+    if (peek_double_member (payload, "temperature", &d))
+        return g_strdup_printf ("Temperature is %.1f\xc2\xb0" "C.", d);
+    if (peek_double_member (payload, "humidity", &d))
+        return g_strdup_printf ("Humidity is %.1f%%.", d);
+
+    return NULL;
+}
+
+/** Best generic name for the fallback summary: the cached friendlyName
+ *  (nicer than the bare IEEE address) when the device is known, else the
+ *  topic's friendly-name @tail. */
+static const gchar *
+summary_fallback_name (
+        ZigbeeCachedDevice *cached,
+        const gchar        *tail)
+{
+    if (cached != NULL && cached->info != NULL &&
+        JSON_NODE_HOLDS_OBJECT (cached->info))
+    {
+        const gchar *fname = peek_string_member (
+                json_node_get_object (cached->info), "friendlyName");
+        if (fname != NULL && *fname != '\0')
+            return fname;
+    }
+    return tail;
+}
+
+/** Override of #PnMqttClass::process_message.  Three responsibilities:
  *
  *    1. Side-effect on bridge/devices publishes -- refresh the
  *       per-friendly-name cache so the next per-device publish has a
@@ -735,6 +1039,13 @@ inject_device_info_block (
  *    2. Decoration on per-device state publishes -- look the topic's
  *       friendly-name suffix up in the cache; on a hit, splice the
  *       cached info block in under `data.payload.device`.
+ *
+ *    3. Smart summary on per-device state publishes -- replace the
+ *       base's opaque "MQTT message on <topic>" output line with a
+ *       plain-language sentence ("Power socket is on.", "Water leak is
+ *       detected.") derived from the cached device type plus the key
+ *       field of this publish.  Always on; falls back to a device-aware
+ *       "Update from <name>." when nothing is recognised.
  *
  *  Chaining to pn_mqtt_real_process_message at the end keeps us
  *  future-proof against the base default growing real behaviour, and
@@ -759,21 +1070,31 @@ pn_zigbee_source_process_message (
      * already happened, so the node still gets the data it needs. */
     if (strcmp (topic, PN_ZIGBEE_DEVICES_TOPIC) == 0)
     {
+        retain_bridge_payload (self, &self->devices, message, TRUE,
+                               "devices");
         rebuild_device_cache (self, message);
         if (self->filter_bridge_devices)
             return FALSE;
         return pn_mqtt_real_process_message (base, message);
     }
 
-    /* bridge/definitions and bridge/info have no internal consumer
-     * yet -- we still parse them (the base already did) but the
-     * filter just suppresses the downstream emit.  Placed here, after
-     * the bridge/devices branch, so its cache-rebuild side effect
-     * isn't skipped. */
-    if (self->filter_bridge_definitions &&
-        strcmp (topic, PN_ZIGBEE_DEFINITIONS_TOPIC) == 0)
-        return FALSE;
+    /* bridge/definitions: retain the raw catalogue snapshot, then honour
+     * the filter -- same consume-internally-then-suppress shape as
+     * bridge/devices, so toggling the filter never costs us the
+     * snapshot.  Placed after the bridge/devices branch so neither
+     * topic's side effect is skipped. */
+    if (strcmp (topic, PN_ZIGBEE_DEFINITIONS_TOPIC) == 0)
+    {
+        retain_bridge_payload (self, &self->definitions, message, FALSE,
+                               "definitions");
+        if (self->filter_bridge_definitions)
+            return FALSE;
+        return pn_mqtt_real_process_message (base, message);
+    }
 
+    /* bridge/info has no internal consumer -- its payload is bulky and
+     * carries nothing the node needs, so it is parsed (by the base) but
+     * never retained; the filter just suppresses the downstream emit. */
     if (self->filter_bridge_info &&
         strcmp (topic, PN_ZIGBEE_INFO_TOPIC) == 0)
         return FALSE;
@@ -785,7 +1106,10 @@ pn_zigbee_source_process_message (
     if (g_str_has_prefix (topic, PN_ZIGBEE_BRIDGE_PREFIX))
         return pn_mqtt_real_process_message (base, message);
 
-    if (self->inject_device_info || self->inject_device_capabilities)
+    /* Per-device publish.  The bare friendly_name tail keys the cache;
+     * a sub-topic like `zigbee2mqtt/<name>/availability` keeps the '/'
+     * and so both misses the cache and is excluded from the summary
+     * below, leaving its default output line intact. */
     {
         const gchar        *friendly_name;
         ZigbeeCachedDevice *cached;
@@ -793,16 +1117,37 @@ pn_zigbee_source_process_message (
         friendly_name = topic + strlen (PN_ZIGBEE_BASE_TOPIC "/");
         cached = g_hash_table_lookup (self->device_info, friendly_name);
 
-        /* The cache key is the bare friendly_name, so a sub-topic
-         * like `zigbee2mqtt/<name>/availability` naturally misses
-         * (key would be `<name>/availability`); no extra suffix
-         * filtering needed.  Non-state shapes (binary, plain
-         * strings) similarly fall out via the HOLDS_OBJECT guard
-         * inside inject_device_info_block. */
-        if (cached != NULL)
+        /* Decoration: splice the cached `device` block in.  Non-state
+         * shapes (binary, plain strings) fall out via the HOLDS_OBJECT
+         * guard inside inject_device_info_block. */
+        if (cached != NULL &&
+            (self->inject_device_info || self->inject_device_capabilities))
             inject_device_info_block (message, cached,
                     self->inject_device_info,
                     self->inject_device_capabilities);
+
+        /* Smart summary (always on): bare device topic only, so
+         * availability / set-echo sub-topics keep the base output line.
+         * Derived from the cached type plus this publish's key field; no
+         * state is tracked, so repeats are expected.  Unrecognised
+         * payloads still beat the raw topic via a device-aware
+         * fallback. */
+        if (strchr (friendly_name, '/') == NULL)
+        {
+            JsonObject *payload = get_payload_object (message);
+            if (payload != NULL)
+            {
+                const gchar *category = cached ? cached->category : NULL;
+                gchar       *summary  = build_state_summary (category, payload);
+
+                if (summary == NULL)
+                    summary = g_strdup_printf ("Update from %s.",
+                            summary_fallback_name (cached, friendly_name));
+
+                pn_message_set_string (message, "output", summary);
+                g_free (summary);
+            }
+        }
     }
 
     return pn_mqtt_real_process_message (base, message);
@@ -937,6 +1282,8 @@ pn_zigbee_source_finalize (GObject *object)
     PnZigbeeSource *self = PN_ZIGBEE_SOURCE (object);
 
     g_clear_pointer (&self->device_info, g_hash_table_destroy);
+    g_clear_pointer (&self->devices,     json_node_unref);
+    g_clear_pointer (&self->definitions, json_node_unref);
 
     G_OBJECT_CLASS (pn_zigbee_source_parent_class)->finalize (object);
 }
