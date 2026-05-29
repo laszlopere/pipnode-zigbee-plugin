@@ -54,6 +54,11 @@ test_unconfigured_drops (void)
     /* Never command a physical device without an explicit target. */
     CHECK_INT_EQ (cap.count, 0);
 
+    /* The unconfigured drop is deliberately NOT logged: the red ❗
+     * visual already flags it, and an upstream point can emit on every
+     * tick, so a per-message warning here would flood the log ring. */
+    CHECK_INT_EQ (t_log_total (node), 0);
+
     g_object_unref (msg);
     t_capture_clear (&cap);
     g_object_unref (node);
@@ -180,6 +185,14 @@ test_no_value_dropped (void)
     pn_node_receive_message (node, m);
     CHECK_INT_EQ (cap.count, 0);
     g_object_unref (m);
+
+    /* Both drops are on a configured node (a real misconfiguration of
+     * the upstream wiring, bounded by the upstream emit), so each is
+     * surfaced as a WARNING naming the device. */
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_WARNING), 2);
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_WARNING,
+                           "no usable numeric value"));
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_WARNING, "lamp"));
 
     t_capture_clear (&cap);
     g_object_unref (node);

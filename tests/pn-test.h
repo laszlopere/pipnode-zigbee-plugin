@@ -75,6 +75,19 @@ typedef struct {
 void t_capture_attach (PnNode *node, TCapture *cap);
 void t_capture_clear  (TCapture *cap);
 
+/* ------------------------------------------------------------------ */
+/*  Diagnostic-log inspection                                          */
+/*                                                                     */
+/*  Nodes record diagnostics via pn_node_log_*(); these read the       */
+/*  node's in-memory log ring (see pn_node_get_log) so a test can      */
+/*  assert that a drop / failure was surfaced -- or, for a path we     */
+/*  deliberately keep silent, that nothing was logged.                 */
+/* ------------------------------------------------------------------ */
+
+guint    t_log_total    (PnNode *node);
+guint    t_log_count    (PnNode *node, PnLogLevel level);
+gboolean t_log_contains (PnNode *node, PnLogLevel level, const char *substr);
+
 G_END_DECLS
 
 #endif /* PN_ZIGBEE_TEST_H */

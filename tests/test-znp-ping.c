@@ -9,15 +9,19 @@
  * GLib main loop.  These tests never pump a main loop, so that handler
  * never fires and the suite opens no device and generates no traffic.
  *
- * What we verify headlessly is the configuration surface and node
- * metadata.  We deliberately do NOT set the "device" property, because
- * doing so triggers an immediate (synchronous) reopen of the port; the
- * default is read instead.  The frame codec (FCS, parsing) is file-
- * static in pn-znp-ping.c and not exercised here.
+ * What we verify headlessly is the configuration surface, node
+ * metadata, and the open-failure diagnostic path.  Most cases read the
+ * default "device" rather than set it, since setting it triggers an
+ * immediate (synchronous) reopen; the open-failure case uses exactly
+ * that, pointing the port at a path that cannot exist so open() fails
+ * at once without arming any watch or timer.  The frame codec (FCS,
+ * parsing) is file-static in pn-znp-ping.c and not exercised here.
  */
 
 #include "pn-test.h"
 #include "pn-znp-ping.h"
+
+#include <json-glib/json-glib.h>
 
 #define NORMAL_ICON "\xef\x82\x9e"  /* U+F09E, the healthy radio glyph */
 
@@ -74,6 +78,35 @@ test_interval_round_trips (void)
     g_object_unref (node);
 }
 
+static void
+test_open_failure_logs_error (void)
+{
+    PnNode  *node = PN_NODE (pn_znp_ping_new ());
+    TCapture cap;
+
+    t_capture_attach (node, &cap);
+
+    /* Setting "device" reopens the port synchronously (the one piece of
+     * I/O the node does without a main loop).  Pointing it at a path
+     * that cannot exist makes open() fail immediately; that failure arms
+     * no watch and no timer, so the test stays headless.  Every failure
+     * path funnels its reason through emit_failure, which now mirrors it
+     * to the node's diagnostic log at ERROR as well as emitting it
+     * downstream. */
+    g_object_set (node, "device", "/nonexistent-pn-zigbee-test/ttyZZ", NULL);
+
+    /* Downstream failure signal still goes out (success = FALSE) ... */
+    CHECK_INT_EQ (cap.count, 1);
+    CHECK_FALSE (json_object_get_boolean_member (pn_message_get_data (cap.last),
+                                                 "success"));
+    /* ... and the same reason is now visible in the node's log. */
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_ERROR), 1);
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_ERROR, "open("));
+
+    t_capture_clear (&cap);
+    g_object_unref (node);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -81,5 +114,6 @@ main (int argc, char **argv)
     t_add ("metadata",            test_metadata);
     t_add ("defaults",            test_defaults);
     t_add ("interval_round_trips", test_interval_round_trips);
+    t_add ("open_failure_logs_error", test_open_failure_logs_error);
     return t_run ();
 }

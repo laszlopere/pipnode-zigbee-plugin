@@ -136,15 +136,25 @@ test_non_binary_state_dropped (void)
 
     t_capture_attach (node, &cap);
 
-    /* "TOGGLE" is neither ON nor OFF: silently dropped, no synthesised 0. */
+    /* "TOGGLE" is neither ON nor OFF: dropped, no synthesised 0.  A
+     * present-but-non-binary state is a bounded, diagnostic event, so
+     * it is logged at INFO naming the offending value. */
     toggle = state_publish ("zigbee2mqtt/lamp", "TOGGLE");
     pn_node_receive_message (node, toggle);
     CHECK_INT_EQ (cap.count, 0);
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_INFO), 1);
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_INFO, "TOGGLE"));
 
-    /* A payload object with no `state` member is dropped too. */
+    /* A payload object with no `state` member is dropped too -- but NOT
+     * logged: Z2M republishes every attribute (brightness, linkquality,
+     * ...) on this same topic, so a missing `state` is the routine case
+     * and a warning would flood the log ring.  The INFO count is
+     * unchanged and no new entry of any level appears. */
     empty = state_publish ("zigbee2mqtt/lamp", NULL);
     pn_node_receive_message (node, empty);
     CHECK_INT_EQ (cap.count, 0);
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_INFO), 1);
+    CHECK_INT_EQ (t_log_total (node), 1);
 
     g_object_unref (toggle);
     g_object_unref (empty);

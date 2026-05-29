@@ -136,3 +136,45 @@ t_capture_clear (TCapture *cap)
     }
     cap->count = 0;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Diagnostic-log inspection                                          */
+/* ------------------------------------------------------------------ */
+
+guint
+t_log_total (PnNode *node)
+{
+    GPtrArray *log = pn_node_get_log (node);
+    return log != NULL ? log->len : 0;
+}
+
+guint
+t_log_count (PnNode *node, PnLogLevel level)
+{
+    GPtrArray *log = pn_node_get_log (node);
+    guint      n   = 0;
+
+    if (log == NULL)
+        return 0;
+    for (guint i = 0; i < log->len; i++)
+        if (pn_log_entry_get_level (log->pdata[i]) == level)
+            n++;
+    return n;
+}
+
+gboolean
+t_log_contains (PnNode *node, PnLogLevel level, const char *substr)
+{
+    GPtrArray *log = pn_node_get_log (node);
+
+    if (log == NULL)
+        return FALSE;
+    for (guint i = 0; i < log->len; i++)
+    {
+        PnLogEntry *e = log->pdata[i];
+        if (pn_log_entry_get_level (e) == level &&
+            g_strstr_len (pn_log_entry_get_message (e), -1, substr) != NULL)
+            return TRUE;
+    }
+    return FALSE;
+}

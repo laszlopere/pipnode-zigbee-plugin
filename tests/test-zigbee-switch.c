@@ -23,7 +23,8 @@ state_publish (const char *topic, const char *state)
     JsonObject *payload = json_object_new ();
     JsonNode   *node    = json_node_new (JSON_NODE_OBJECT);
 
-    json_object_set_string_member (payload, "state", state);
+    if (state != NULL)
+        json_object_set_string_member (payload, "state", state);
     json_node_take_object (node, payload);
     pn_message_set_member (msg, "payload", node);
     return msg;
@@ -104,6 +105,69 @@ test_inbound_unconfigured_noop (void)
 }
 
 static void
+test_inbound_non_binary_state_logs (void)
+{
+    PnNode   *node = PN_NODE (pn_zigbee_switch_new ());
+    PnSwitch *sw   = PN_SWITCH (node);
+    TCapture  cap;
+    PnMessage *toggle, *empty;
+
+    g_object_set (node, "friendly-name", "lamp", NULL);
+    t_capture_attach (node, &cap);
+
+    /* A present-but-non-binary inbound state (e.g. "TOGGLE") leaves the
+     * latch alone and emits nothing, but is bounded and diagnostic, so
+     * it is logged at INFO naming the value. */
+    toggle = state_publish ("zigbee2mqtt/lamp", "TOGGLE");
+    pn_node_receive_message (node, toggle);
+    CHECK_FALSE (pn_switch_get_on (sw));
+    CHECK_INT_EQ (cap.count, 0);
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_INFO), 1);
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_INFO, "TOGGLE"));
+
+    /* A payload with no `state` member is the routine attribute-update
+     * case (Z2M publishes brightness/linkquality on this same topic),
+     * so it is dropped WITHOUT logging -- nothing new is recorded. */
+    empty = state_publish ("zigbee2mqtt/lamp", NULL);
+    pn_node_receive_message (node, empty);
+    CHECK_INT_EQ (cap.count, 0);
+    CHECK_INT_EQ (t_log_total (node), 1);
+
+    g_object_unref (toggle);
+    g_object_unref (empty);
+    t_capture_clear (&cap);
+    g_object_unref (node);
+}
+
+static void
+test_unconfigured_outbound_logs (void)
+{
+    PnNode   *node = PN_NODE (pn_zigbee_switch_new ());
+    PnSwitch *sw   = PN_SWITCH (node);
+    TCapture  cap;
+
+    /* No friendly-name set: a toggle still emits (the base switch
+     * shape, via the dispatcher) but cannot build a real
+     * zigbee2mqtt/<dev>/set command.  Unlike the inbound read path,
+     * this fires only on a user toggle, so it is surfaced as a WARNING. */
+    t_capture_attach (node, &cap);
+    pn_switch_toggle (sw);
+
+    CHECK_INT_EQ (cap.count, 1);
+    /* The fallback's whole purpose is to avoid publishing a command to
+     * the empty "zigbee2mqtt//set" topic; whatever base topic it emits,
+     * it must not be that. */
+    CHECK (g_strcmp0 (pn_message_get_topic (cap.last),
+                      "zigbee2mqtt//set") != 0);
+    CHECK_INT_EQ (t_log_count (node, PN_LOG_LEVEL_WARNING), 1);
+    CHECK (t_log_contains (node, PN_LOG_LEVEL_WARNING,
+                           "no friendly_name configured"));
+
+    t_capture_clear (&cap);
+    g_object_unref (node);
+}
+
+static void
 test_outbound_toggle_builds_command (void)
 {
     PnNode   *node = PN_NODE (pn_zigbee_switch_new ());
@@ -172,6 +236,8 @@ main (int argc, char **argv)
     t_add ("inbound_syncs_latch_silently", test_inbound_syncs_latch_silently);
     t_add ("inbound_wrong_topic_ignored",  test_inbound_wrong_topic_ignored);
     t_add ("inbound_unconfigured_noop",     test_inbound_unconfigured_noop);
+    t_add ("inbound_non_binary_state_logs", test_inbound_non_binary_state_logs);
+    t_add ("unconfigured_outbound_logs",    test_unconfigured_outbound_logs);
     t_add ("outbound_toggle_builds_cmd",    test_outbound_toggle_builds_command);
     t_add ("visual_state",                  test_visual_state);
     return t_run ();
