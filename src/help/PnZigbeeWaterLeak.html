@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Water Leak (PnZigbeeWaterLeak) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeWaterLeak">Zigbee Water Leak</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeWaterLeak</code>.
+</p>
+<p>
+Edge filter and reshaping node for Zigbee water-leak sensors bridged
+through <a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a>.  A leak
+sensor publishes its state on
+<code>zigbee2mqtt/&lt;friendly_name&gt;</code> with a
+<code>data.payload</code> JSON object carrying a boolean
+<code>water_leak</code> member, alongside the usual battery and radio
+attributes:
+</p>
+<pre>{ "water_leak": true,  "battery": 93, "linkquality": 233, "tamper": false, "voltage": 2800 }
+{ "water_leak": false, "battery": 93, "linkquality": 229, "tamper": false, "voltage": 2800 }</pre>
+<p>
+Drop this node between a <em>Zigbee Source</em> (or a plain
+<em>MQTT Source</em>) and any downstream node to turn the raw stream of
+publishes into a clean event on each real leak transition:
+</p>
+<pre>Zigbee Source &rarr; Zigbee Water Leak &rarr; Notify / Debug / Switch / &hellip;</pre>
+
+<h5>Why an edge filter</h5>
+<p>
+The sensor republishes its <strong>whole</strong> payload on every
+routine update &mdash; a battery report, a link-quality refresh &mdash;
+and almost all of those carry <code>water_leak: false</code>.  Passing
+through the bare value would therefore fire constantly.  What actually
+matters is the <strong>transition</strong>: the moment a leak begins
+(<code>false&nbsp;&rarr;&nbsp;true</code>) or clears
+(<code>true&nbsp;&rarr;&nbsp;false</code>).  This node remembers the
+last <code>water_leak</code> value it saw <em>per device</em> and only
+forwards a message when that value changes; the repeated same-state
+updates in between are dropped.
+</p>
+
+<h5>What it does</h5>
+<table>
+  <tr><th>Step</th><th>Behaviour</th></tr>
+  <tr><td>Filter</td>
+      <td>Only messages whose <code>data.payload</code> is an object
+          carrying a boolean <code>water_leak</code> are considered;
+          everything else (other device types, bridge traffic,
+          bare-string availability) is dropped silently.  Of those, only
+          a message that <strong>changes</strong> the remembered state
+          for that device, and whose edge the <code>mode</code> selects,
+          is forwarded.</td></tr>
+  <tr><td>Reshape</td>
+      <td>Survivors are stamped into the canonical message contract so a
+          downstream <em>LED</em>, <em>Debug</em>, <em>Graph</em> or
+          <em>Notify</em> reads the same shape it gets from any other
+          node:
+          <ul>
+            <li><code>data.success</code> = <code>true</code></li>
+            <li><code>data.value</code> = <code>1.0</code> on a leak
+                begin, <code>0.0</code> on a leak end</li>
+            <li><code>data.device</code> = the resolved sensor name</li>
+            <li><code>data.output</code> = a human-readable line, e.g.
+                <code>Water leak detected on Kitchen</code> /
+                <code>Water leak cleared on Kitchen</code></li>
+          </ul>
+          The original envelope and <code>data.payload</code> (the
+          <code>battery</code>, <code>linkquality</code>,
+          <code>tamper</code>, <code>voltage</code>, and any injected
+          <code>device</code> block) are left untouched, so a downstream
+          node can still inspect the detail.</td></tr>
+</table>
+
+<h5>First message after the node starts</h5>
+<p>
+A device's <strong>first</strong> publish only seeds the remembered
+state &mdash; nothing is forwarded for it.  With no prior value there is
+no transition to report, and seeding quietly avoids firing a spurious
+&ldquo;begin&rdquo; just because the node was dropped (or the worksheet
+reloaded) while a leak happened to be active.  The next genuine change
+then fires normally.
+</p>
+
+<h5>How the sensor is named</h5>
+<p>
+The name in <code>data.output</code> / <code>data.device</code> &mdash;
+also the key used to track state per device &mdash; is resolved in this
+order:
+</p>
+<ol>
+  <li><code>data.payload.device.friendlyName</code> &mdash; the identity
+      block a <em>Zigbee Source</em> injects by default
+      (<code>inject-device-info</code>), the human-friendly Z2M
+      name.</li>
+  <li>The friendly-name tail of the envelope topic
+      (<code>zigbee2mqtt/&lt;tail&gt;</code> &rarr; <code>&lt;tail&gt;</code>);
+      for an unrenamed device this is its IEEE address, e.g.
+      <code>0xa4c13860befb28ec</code>.</li>
+  <li>The bare topic, then <code>unknown</code>, as last resorts.</li>
+</ol>
+
+<h5>Configuration</h5>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td><strong>Optional</strong> sensor filter.  When set, only edges
+          from this sensor pass; matched against the injected
+          <code>data.payload.device.friendlyName</code> (when an upstream
+          <em>Zigbee Source</em> injects device info) or, failing that,
+          the friendly-name tail of the envelope topic
+          (<code>zigbee2mqtt/&lt;tail&gt;</code> &mdash; the bare device
+          id for an unrenamed device), so you can enter either form.
+          <strong>Empty (the default) tracks every water-leak
+          sensor.</strong></td></tr>
+  <tr><td><code>mode</code></td>
+      <td>Which transitions to forward:
+          <ul>
+            <li><strong>Leak begins</strong> &mdash; only the
+                <code>false&nbsp;&rarr;&nbsp;true</code> edge.</li>
+            <li><strong>Leak ends</strong> &mdash; only the
+                <code>true&nbsp;&rarr;&nbsp;false</code> edge.</li>
+            <li><strong>Both</strong> (the default) &mdash; either
+                edge.</li>
+          </ul></td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>MQTT/Zigbee Source (topic = zigbee2mqtt/#)
+    &rarr; Zigbee Water Leak (mode = Leak begins)
+        &rarr; Notify (title = "{{output}}")</pre>
+<p>
+When water bridges the sensor it publishes
+<code>zigbee2mqtt/0xa4c13860befb28ec</code> with
+<code>{"water_leak":true,&hellip;}</code>; the <em>Zigbee Source</em>
+forwards it (and, by default, injects the device block); the
+<em>Zigbee Water Leak</em> node sees the
+<code>false&nbsp;&rarr;&nbsp;true</code> transition, sets
+<code>value=1.0</code> / <code>success=true</code> and an output line
+like <code>Water leak detected on Kitchen</code>, and the
+<em>Notify</em> node pops it on screen.  The subsequent
+<code>water_leak:false</code> battery reports are dropped until the leak
+genuinely clears.
+</p>
+
+</body>
+</html>

@@ -36,6 +36,8 @@
 /*      factored write-half (value message in, .../set command out).   */
 /*    * PnZigbeeRemote -- filters remote button-press events (payload  */
 /*      `action`) and reshapes them into the canonical message shape.  */
+/*    * PnZigbeeWaterLeak -- edge-filters a leak sensor's boolean       */
+/*      `water_leak` (begin / end / both) and reshapes survivors.      */
 /*                                                                     */
 /*  Further nodes (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, ...)   */
 /*  will be added alongside their pn-zigbee-<node>.c / .h source and   */
@@ -63,6 +65,7 @@
 #include "pn-zigbee-remote.h"
 #include "pn-zigbee-source.h"
 #include "pn-zigbee-switch.h"
+#include "pn-zigbee-water-leak.h"
 
 G_MODULE_EXPORT const PnPluginInfo *
 pn_plugin_init (PnNodeFactory *factory)
@@ -80,6 +83,7 @@ pn_plugin_init (PnNodeFactory *factory)
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_STATUS);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_COMMAND);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_REMOTE);
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_WATER_LEAK);
 
     return &info;
 }

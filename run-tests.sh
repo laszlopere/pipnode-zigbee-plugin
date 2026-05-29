@@ -89,6 +89,7 @@ tests_table=(
     "test-zigbee-relay-status   pn-zigbee-relay-status.c"
     "test-zigbee-relay-command  pn-zigbee-relay-command.c"
     "test-zigbee-remote         pn-zigbee-remote.c"
+    "test-zigbee-water-leak     pn-zigbee-water-leak.c"
     "test-zigbee-switch         pn-zigbee-switch.c"
     # "test-zigbee-source         pn-zigbee-source.c"   # blocked: see NOTE above
 )
