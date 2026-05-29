@@ -84,7 +84,10 @@
         "x" : 240.0,
         "y" : 280.0
       },
-      "properties" : {      }
+      "properties" : {
+        "friendly-name" : "0xa4c138c974b825c2",
+        "action" : "arm_all_zones"
+      }
     }
   ],
   "connections" : [
