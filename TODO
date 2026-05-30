@@ -170,3 +170,99 @@ below are behavioral / contract issues.
       because constructing it auto-connects libmosquitto
       off-thread. Worth an integration test against a throwaway
       broker.
+
+
+----------------------------------------------------------------
+ Devices dialog: edit the selected device's settings on the
+ right-hand notebook
+----------------------------------------------------------------
+
+Goal: clicking a device in the left-hand list
+(zb_on_device_selected in src/pn-zigbee-gui.c, which currently
+only echoes name + IEEE to the status bar) populates the
+right-hand notebook with that device's settings -- one or more
+pages, every setting shown and, where Z2M marks it settable,
+editable -- and writes changes back to the device.
+
+Data already in hand:
+  - The device record + its definition.exposes / definition.options
+    tree, from the stored bridge/devices inventory (ctx->devices).
+  - Live current values: the retained per-device state topic
+    zigbee2mqtt/<friendly_name> (a JSON object of property -> value).
+    The hidden source already receives it on the zigbee2mqtt/#
+    subscription, but the dialog does not yet capture it.
+
+Write-back channel (verified, pn-mqtt-sink.h): a hidden PnMqttSink
+(pn_mqtt_sink_new) bound to the same broker PUBLISHes one MQTT
+message per inbound PnMessage -- topic = the message's envelope
+topic, payload = data.payload as JSON. So building a PnMessage with
+topic zigbee2mqtt/<name>/set and data.payload {property: value} and
+handing it to the sink (pn_node_receive_message) is the supported
+publish path; no second mosquitto client to hand-roll.
+
+9. Build editable per-device settings pages from the exposes tree.
+   - Capture live state. In zb_on_message, when the topic is the
+     bare device topic zigbee2mqtt/<friendly_name> (no further '/'),
+     store a deep copy of the payload object in a
+     friendly_name -> JsonObject map on the ctx. This is the
+     current-value source the controls seed from; refresh it on every
+     such publish and, when it is the shown device, push the new
+     values into the live controls.
+   - Resolve the selected device. On row select, look the row id
+     (IEEE) up in ctx->devices to find its object, then its
+     definition.exposes and definition.options arrays. Stash the
+     selected friendly_name on the ctx (needed for the set topic and
+     the state-map lookup).
+   - Clear old pages. Remove any previously-built device pages from
+     the notebook (keep the static "Broker" page), tearing down their
+     per-control bindings, before building the new device's pages.
+     Track the dynamic pages/widgets on the ctx so teardown on
+     re-select and on dialog close is clean.
+   - Walk the exposes tree into pages/sections.
+       * A top-level composite expose (type switch/light/cover/lock/
+         climate/fan, or "composite"/"list") becomes its own page or
+         section; recurse into its `features` array for the rows.
+       * Bare top-level exposes (binary/numeric/enum/text) group under
+         a generic "State" / "Settings" page.
+       * Use pn_device_form_new_tab + _add_section + a GtkGrid of rows,
+         the same house-style helpers the Broker page already uses.
+   - Map each expose to a widget by `type`, honouring the `access`
+     bitmap (1=published, 2=settable, 4=gettable): bit 2 set -> an
+     editable control, otherwise a read-only value row via
+     pn_device_form_attach_label_row.
+       * binary  -> GtkSwitch, mapping value_on/value_off (string
+         "ON"/"OFF" or JSON bool) to active state.
+       * numeric -> PnDeviceSpin (pn_device_spin_new_with_range) seeded
+         with value_min/value_max/value_step; `unit` as a suffix label.
+       * enum    -> PnDeviceCombo filled from the `values` string array.
+       * text    -> GtkEntry / PnInlineEditLabel (pn_inline_edit_label_new).
+       * composite/list -> nested sub-section built by the same walk.
+       * unknown `type` -> read-only row showing the raw JSON, so a
+         newer Z2M expose surfaces rather than vanishing.
+     Resolve each control's JSON key from `property` (and `endpoint`:
+     the key becomes <property>_<endpoint> when present); label from
+     `label`/`name`, tooltip from `description`.
+   - Seed current values. After building, fill every control from the
+     captured device-state object by its resolved property key; leave
+     the "—" placeholder when the value is absent.
+   - Apply / write-back. Give each settable page (or each control) an
+     Apply that collects the changed settable properties into a
+     JsonObject, builds a PnMessage with topic
+     zigbee2mqtt/<friendly_name>/set and data.payload = that object,
+     and hands it to the hidden PnMqttSink via
+     pn_node_receive_message. Create/destroy the sink alongside the
+     source in zb_start_source / zb_drop_source (same broker-profile).
+   - Reflect confirmed state. Z2M re-publishes the device's full state
+     on zigbee2mqtt/<friendly_name> after a successful set, which the
+     live-state capture already receives -- repaint the shown controls
+     from it so the UI shows what the device accepted (a value the
+     device clamped/rejected shows through), not what was typed.
+   - Lifecycle / edge cases. A device with no definition (the
+     Coordinator) or empty exposes gets an identity-only read-only
+     page; switching devices or pressing Reload rebuilds cleanly;
+     closing the dialog frees the state map and the sink. Surface
+     definition.options (retain / transition / legacy) on a separate
+     "Options" page from the exposes, if shown at all.
+   - Optional later. Group exposes by `endpoint` into per-endpoint
+     pages for multi-gang devices; expose numeric `presets`; a
+     per-control "get" refresh for access bit 4.
