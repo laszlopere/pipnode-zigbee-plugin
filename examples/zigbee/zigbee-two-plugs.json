@@ -115,6 +115,26 @@
       "properties" : {
         "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c138a4c9626802\"}]"
       }
+    },
+    {
+      "type" : "PnZigbeeSink",
+      "uuid" : "730fee09-8f9a-4d9c-a2e4-b9c4c2818dd1",
+      "name" : "Zigbee Sink 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 480.0,
+        "y" : 160.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
+        "topic-template" : "",
+        "payload" : "",
+        "retain" : false,
+        "qos" : 0
+      }
     }
   ],
   "connections" : [
@@ -125,14 +145,6 @@
     {
       "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
       "target_id" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f"
-    },
-    {
-      "source_id" : "c6160241-af67-44a2-8e43-5e5530522080",
-      "target_id" : "4ea48873-156f-4cc1-aa51-5457159fc852"
-    },
-    {
-      "source_id" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f",
-      "target_id" : "4ea48873-156f-4cc1-aa51-5457159fc852"
     },
     {
       "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
@@ -149,6 +161,14 @@
     {
       "source_id" : "8576afee-a672-49c2-a62e-de5c7233d9b8",
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "c6160241-af67-44a2-8e43-5e5530522080",
+      "target_id" : "730fee09-8f9a-4d9c-a2e4-b9c4c2818dd1"
+    },
+    {
+      "source_id" : "fc6bad7d-3cf1-42f3-afda-2f0ae550a30f",
+      "target_id" : "730fee09-8f9a-4d9c-a2e4-b9c4c2818dd1"
     }
   ],
   "sheets" : [
