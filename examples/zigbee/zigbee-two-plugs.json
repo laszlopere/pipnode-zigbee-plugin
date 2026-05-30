@@ -57,26 +57,6 @@
       }
     },
     {
-      "type" : "PnMqttSink",
-      "uuid" : "4ea48873-156f-4cc1-aa51-5457159fc852",
-      "name" : "MQTT Sink 1",
-      "worksheet" : "Worksheet",
-      "position" : {
-        "x" : 480.0,
-        "y" : 100.0
-      },
-      "properties" : {
-        "broker-profile" : "",
-        "url" : "",
-        "username" : "",
-        "client-id" : "",
-        "topic-template" : "",
-        "payload" : "",
-        "retain" : false,
-        "qos" : 0
-      }
-    },
-    {
       "type" : "PnDebug",
       "uuid" : "08a7f710-40e8-4740-b5a5-937a4ce278dc",
       "name" : "Debug Print 1",
@@ -123,7 +103,7 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 480.0,
-        "y" : 160.0
+        "y" : 100.0
       },
       "properties" : {
         "broker-profile" : "",
