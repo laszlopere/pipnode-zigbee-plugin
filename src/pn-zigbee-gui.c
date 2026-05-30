@@ -94,11 +94,26 @@
  * surface in the status bar (a successful change also re-publishes
  * bridge/devices, so the list refreshes itself). */
 /* Pairing window: publish {"value":true,"time":<seconds>} to open the
- * coordinator's join window, {"value":false} to close it early. */
-#define ZB_DEV_PERMIT_TOPIC   "zigbee2mqtt/bridge/request/permit_join"
+ * coordinator's join window, {"value":false} to close it early.  Z2M
+ * acknowledges on the response topic with {status, error}; we surface a
+ * failure there so a rejected request is not mistaken for an open window. */
+#define ZB_DEV_PERMIT_TOPIC          "zigbee2mqtt/bridge/request/permit_join"
+#define ZB_DEV_PERMIT_RESPONSE_TOPIC "zigbee2mqtt/bridge/response/permit_join"
 
-/* Length of the pairing window we open, in seconds (the requested 5 min). */
+/* Length of the pairing window we hold open, in seconds (the requested 5 min). */
 #define ZB_JOIN_WINDOW_SECONDS 300
+
+/* The Zigbee permit-join duration is a single octet carried in the ZDO
+ * Mgmt_Permit_Joining request, so a single request can open the window for at
+ * most 254 seconds (zigbee-herdsman asserts time <= 254; 255 means "forever"
+ * and Z2M does not use it).  To honour the longer ZB_JOIN_WINDOW_SECONDS we
+ * grant in <=254 s chunks and re-arm before each lapses. */
+#define ZB_JOIN_CHUNK_SECONDS  254
+
+/* Re-arm this many seconds before the current grant lapses, so a fresh grant
+ * is in place across the seam (covers MQTT + radio round-trip).  Must be < the
+ * chunk length. */
+#define ZB_JOIN_REARM_LEAD     10
 
 #define ZB_DEV_RENAME_TOPIC   "zigbee2mqtt/bridge/request/device/rename"
 #define ZB_DEV_OPTIONS_TOPIC  "zigbee2mqtt/bridge/request/device/options"
@@ -217,6 +232,10 @@ typedef struct
     guint            join_tick_id;
     guint            join_total;
     guint            join_left;
+    /* Seconds left on the coordinator's *current* permit-join grant (each is
+     * <= ZB_JOIN_CHUNK_SECONDS).  The tick re-arms a fresh grant as this nears
+     * zero while join_left still has window to cover. */
+    guint            join_grant_left;
     guint            join_base_count;
     guint            join_joined;
 } ZbDevCtx;
@@ -551,6 +570,28 @@ zb_report_response (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
         pn_device_dialog_set_statusf (ctx->shell, "Device %s: ok.", cmd);
 }
 
+/* Surface the bridge/response/permit_join acknowledgement.  On an error (e.g.
+ * a duration the coordinator rejects) Z2M never opens the window, so a silent
+ * countdown would be a lie -- report the reason in the status bar. */
+static void
+zb_report_permit_response (ZbDevCtx *ctx, PnMessage *message)
+{
+    JsonNode    *payload = pn_message_get_member (message, "payload");
+    JsonObject  *obj;
+    const gchar *status, *error;
+
+    if (payload == NULL || !JSON_NODE_HOLDS_OBJECT (payload))
+        return;
+    obj    = json_node_get_object (payload);
+    status = zb_peek_string (obj, "status");
+    error  = zb_peek_string (obj, "error");
+
+    if (g_strcmp0 (status, "error") == 0)
+        pn_device_dialog_set_statusf (
+                ctx->shell, "Join window request failed: %s",
+                error != NULL ? error : "unknown error");
+}
+
 /* "message" signal handler.  The base PnMqtt marshals every PUBLISH onto
  * the main thread before emitting, so we can touch GTK directly here. */
 static void
@@ -570,6 +611,8 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
     topic = pn_message_get_topic (message);
     if (g_strcmp0 (topic, ZB_DEV_DEVICES_TOPIC) == 0)
         zb_ingest_devices (ctx, message);
+    else if (g_strcmp0 (topic, ZB_DEV_PERMIT_RESPONSE_TOPIC) == 0)
+        zb_report_permit_response (ctx, message);
     else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_RESPONSE_PREFIX))
         zb_report_response (ctx, topic, message);
     else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_TOPIC_PREFIX))
@@ -2256,8 +2299,14 @@ zb_join_finish (ZbDevCtx *ctx, gboolean user_ended)
         ctx->join_tick_id = 0;
     }
 
-    if (user_ended)
-        zb_join_publish (ctx, FALSE, 0);
+    /* Always close the coordinator's window.  Because we grant in <=254 s
+     * chunks and re-arm, the most recent grant typically extends past the
+     * window we promised, so even a natural timer expiry leaves the coordinator
+     * accepting devices -- we must explicitly disable it.  A close when none is
+     * open is a harmless no-op.  (@user_ended is kept for the caller's intent
+     * but no longer gates this.) */
+    (void) user_ended;
+    zb_join_publish (ctx, FALSE, 0);
 
     if (ctx->join_spinner != NULL)
     {
@@ -2310,6 +2359,20 @@ zb_join_tick (gpointer user_data)
 
     if (ctx->join_left > 0)
         ctx->join_left--;
+    if (ctx->join_grant_left > 0)
+        ctx->join_grant_left--;
+
+    /* Re-arm: a single permit_join lasts at most ZB_JOIN_CHUNK_SECONDS, so
+     * before the current grant lapses -- and while enough window remains to be
+     * worth it -- send a fresh grant to keep the coordinator accepting devices
+     * across the whole ZB_JOIN_WINDOW_SECONDS the dialog promises. */
+    if (ctx->join_left > ZB_JOIN_REARM_LEAD &&
+        ctx->join_grant_left <= ZB_JOIN_REARM_LEAD)
+    {
+        zb_join_publish (ctx, TRUE, ZB_JOIN_CHUNK_SECONDS);
+        ctx->join_grant_left = ZB_JOIN_CHUNK_SECONDS;
+    }
+
     zb_join_update (ctx);
 
     if (ctx->join_left == 0)
@@ -2389,6 +2452,7 @@ zb_on_join_clicked (GtkButton *button, gpointer user_data)
     ctx->join_label      = label;
     ctx->join_total      = ZB_JOIN_WINDOW_SECONDS;
     ctx->join_left       = ZB_JOIN_WINDOW_SECONDS;
+    ctx->join_grant_left = ZB_JOIN_CHUNK_SECONDS;   /* first grant below */
     ctx->join_base_count = zb_device_count (ctx);
     ctx->join_joined     = 0;
     zb_join_update (ctx);
@@ -2398,9 +2462,10 @@ zb_on_join_clicked (GtkButton *button, gpointer user_data)
     g_signal_connect (dialog, "destroy",
                       G_CALLBACK (zb_join_on_destroy), ctx);
 
-    /* Open the window and spin the section marker; the dialog's own modality
-     * blocks the parent's input without us desensitising it. */
-    zb_join_publish (ctx, TRUE, ZB_JOIN_WINDOW_SECONDS);
+    /* Open the window (first <=254 s grant; the tick re-arms it) and spin the
+     * section marker; the dialog's own modality blocks the parent's input
+     * without us desensitising it. */
+    zb_join_publish (ctx, TRUE, ZB_JOIN_CHUNK_SECONDS);
     if (ctx->join_spinner != NULL)
     {
         gtk_widget_show (ctx->join_spinner);
