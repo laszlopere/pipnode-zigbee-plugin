@@ -922,7 +922,17 @@ zb_seed_control_node (ZbControl *c, JsonNode *v)
     case ZB_CTL_ENUM:
         {
             gchar *s = zb_json_to_display (v);
-            gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+            /* The reported value may not be one of the enum's advertised
+             * `values` (a device can report a state outside the settable set,
+             * or the definition can lag the firmware).  set_active_id then
+             * silently fails and the combo keeps showing the wrong row -- which
+             * reads as "the dialog ignores what the device reports".  Append
+             * the value as its own row so the device's truth is always shown. */
+            if (!gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s))
+            {
+                gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (c->widget), s, s);
+                gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+            }
             g_free (s);
         }
         break;
@@ -935,9 +945,23 @@ zb_seed_control_node (ZbControl *c, JsonNode *v)
         break;
     case ZB_CTL_READONLY:
         {
-            gchar *s = zb_json_to_display (v);
-            pn_device_form_set_value (GTK_LABEL (c->widget), s);
-            g_free (s);
+            /* A reported boolean reads better as the device's own on/off words
+             * (or Yes/No) than a bare true/false; other scalars display as-is. */
+            if (JSON_NODE_HOLDS_VALUE (v) &&
+                json_node_get_value_type (v) == G_TYPE_BOOLEAN)
+            {
+                gboolean     on  = json_node_get_boolean (v);
+                const gchar *txt = on
+                    ? (c->value_on  != NULL ? c->value_on  : "Yes")
+                    : (c->value_off != NULL ? c->value_off : "No");
+                pn_device_form_set_value (GTK_LABEL (c->widget), txt);
+            }
+            else
+            {
+                gchar *s = zb_json_to_display (v);
+                pn_device_form_set_value (GTK_LABEL (c->widget), s);
+                g_free (s);
+            }
         }
         break;
     }
@@ -1422,10 +1446,24 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
         GtkLabel *value = pn_device_form_attach_label_row (grid, (*row)++, label);
 
         /* A reported value (not settable) has no meaningful value until the
-         * device sends one: show a "pending" placeholder rather than an empty
-         * cell, which zb_seed_controls overwrites when the report arrives. */
+         * device sends one.  Show a placeholder rather than an empty cell,
+         * which zb_seed_controls overwrites when the report arrives.  A value
+         * the device only reports on an event (no GET access: a leak, a tamper,
+         * a low battery) may legitimately never arrive until that event, so say
+         * so rather than imply a fetch is in flight; a gettable value really is
+         * just pending a reply. */
         if (!settable)
-            pn_device_form_set_value (value, "pending\xe2\x80\xa6");
+            pn_device_form_set_value (
+                    value, gettable ? "pending\xe2\x80\xa6"
+                                    : "waiting for the device to report\xe2\x80\xa6");
+
+        /* Keep a binary's on/off mapping so a reported "ON"/"OFF" (or JSON
+         * bool) renders as the device's own words, not a bare true/false. */
+        if (g_strcmp0 (type, "binary") == 0)
+        {
+            value_on  = g_strdup (zb_peek_string (exp, "value_on"));
+            value_off = g_strdup (zb_peek_string (exp, "value_off"));
+        }
         w    = GTK_WIDGET (value);
         kind = ZB_CTL_READONLY;
     }
@@ -1889,16 +1927,16 @@ zb_build_options_page (ZbDevCtx *ctx, JsonObject *dev, JsonArray *options)
     gtk_grid_set_row_spacing    (GTK_GRID (gen), 8);
     gtk_grid_set_column_spacing (GTK_GRID (gen), 12);
     zb_add_generic_options (ctx, GTK_GRID (gen), dev, page);
-    zb_add_section_desc (inner, "Options (defaults shown)",
-                         "These are advanced, behind-the-scenes settings for "
-                         "how the system handles this device's messages \xe2\x80\x94 "
-                         "such as how long to remember its last status. Most "
-                         "people never need them, so the safe choice is to "
-                         "leave them alone. Because the system cannot read "
-                         "these values back, the boxes show the usual defaults "
-                         "rather than what is in effect; only a box you change "
-                         "is sent, so anything you leave alone stays as it "
-                         "was.", gen);
+    zb_add_section_desc (inner, "Zigbee2MQTT handling (defaults shown)",
+                         "These are not settings on the device itself \xe2\x80\x94 "
+                         "they tell the hub (Zigbee2MQTT) how to handle this "
+                         "device's messages, such as how long to remember its "
+                         "last status or whether to ignore it. Most people never "
+                         "need them, so the safe choice is to leave them alone. "
+                         "The hub does not report these back, so the boxes show "
+                         "the usual defaults rather than what is in effect; only "
+                         "a box you change is sent, so anything you leave alone "
+                         "stays as it was.", gen);
 
     if (n > 0)
     {
@@ -2602,7 +2640,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
     ctx->shell = pn_device_dialog_new (parent, "Zigbee Devices",
                                        PN_DEVICE_DIALOG_WITH_DEVICE_LIST);
     dialog = pn_device_dialog_get_dialog (ctx->shell);
-    gtk_window_set_default_size (GTK_WINDOW (dialog), 720, 630);
+    gtk_window_set_default_size (GTK_WINDOW (dialog), 960, 630);
 
     tab = pn_device_form_new_tab (&inner);
 
