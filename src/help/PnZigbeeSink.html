@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Zigbee Sink</title>
+</head>
+<body>
+  <h1>Zigbee Sink</h1>
+
+  <p>
+    A Zigbee2MQTT-flavoured MQTT <strong>sink</strong> &mdash; the
+    publish-side companion to the
+    <a href="PnZigbeeSource.html">Zigbee Source</a>.  It is a specialised
+    <a href="PnMqttSink.html">MQTT Sink</a> that sits with the rest of the
+    Zigbee palette (magenta body, paper-plane glyph) so a Source &rarr;
+    filter &rarr; Sink flow reads as a single Zigbee unit on the
+    worksheet.
+  </p>
+
+  <p>
+    For now the node only changes its <em>appearance</em>: it publishes
+    exactly what the base MQTT Sink does &mdash; each inbound message to its
+    envelope topic, through the configured broker &mdash; so all of the
+    base node's configuration (broker profile, topic / payload template,
+    retain, QoS, auth) applies unchanged.  See the
+    <a href="PnMqttSink.html">MQTT Sink</a> help for those settings.
+  </p>
+
+  <p>
+    A Z2M-flavoured default (publishing to
+    <code>zigbee2mqtt/&lt;friendly_name&gt;/set</code> with a Z2M-shaped
+    payload) may be layered on in a later revision; until then, stamp the
+    command topic upstream &mdash; for example with a
+    <a href="PnZigbeeRelayCommand.html">Zigbee Relay Command</a> node,
+    which already emits the <code>.../set</code> topic and
+    <code>{"state":"ON"|"OFF"}</code> payload this sink will forward
+    verbatim.
+  </p>
+</body>
+</html>

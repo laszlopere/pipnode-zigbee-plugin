@@ -28,6 +28,9 @@
 /*                                                                     */
 /*    * PnZigbeeSource -- PnMqtt subclass, defaults to subscribing     */
 /*      zigbee2mqtt/# and drops the noisy bridge/logging channel.      */
+/*    * PnZigbeeSink -- PnMqttSink subclass, the publish-side          */
+/*      companion to PnZigbeeSource; currently a Zigbee-flavoured skin  */
+/*      over the base sink (same publish behaviour, Zigbee palette).   */
 /*    * PnZigbeeSwitch -- bidirectional on/off slider for a single     */
 /*      Z2M endpoint (zigbee2mqtt/<friendly_name> in, .../set out).    */
 /*    * PnZigbeeRelayStatus -- receive-only decoder, the factored      */
@@ -43,16 +46,11 @@
 /*  will be added alongside their pn-zigbee-<node>.c / .h source and   */
 /*  a help/<TypeName>.html page.                                       */
 /*                                                                     */
-/*  TODO: add a PnZigbeeSink -- the publish-side companion to          */
-/*  PnZigbeeSource -- once the host's PnMqttSink becomes derivable.    */
-/*  PnZigbeeSource works by subclassing the derivable PnMqtt base;     */
-/*  the symmetric sink would subclass PnMqttSink, but that type is     */
-/*  currently declared with G_DECLARE_FINAL_TYPE (non-derivable) in    */
-/*  ../pipnode/lib/pn-mqtt-sink.h, so it cannot be specialised here.   */
-/*  When it is switched to G_DECLARE_DERIVABLE_TYPE, wire up a         */
-/*  Zigbee2MQTT-flavoured sink (default zigbee2mqtt/<name>/set topic,  */
-/*  Z2M-shaped payload) the same way PnZigbeeSource specialises the    */
-/*  source.                                                            */
+/*  PnZigbeeSink now subclasses the host's (newly derivable) PnMqttSink */
+/*  for its Zigbee identity only; a Z2M-flavoured topic / payload       */
+/*  default (zigbee2mqtt/<name>/set, Z2M-shaped payload) can be layered */
+/*  on later by overriding PnMqttSinkClass::process_message, the same   */
+/*  way PnZigbeeSource specialises PnMqtt.                              */
 /* ------------------------------------------------------------------ */
 
 #include <gmodule.h>
@@ -64,6 +62,7 @@
 #include "pn-zigbee-relay-command.h"
 #include "pn-zigbee-relay-status.h"
 #include "pn-zigbee-remote.h"
+#include "pn-zigbee-sink.h"
 #include "pn-zigbee-source.h"
 #include "pn-zigbee-switch.h"
 #include "pn-zigbee-water-leak.h"
@@ -80,6 +79,7 @@ pn_plugin_init (PnNodeFactory *factory)
     };
 
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SOURCE);
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SINK);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_SWITCH);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_STATUS);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_COMMAND);

@@ -14,6 +14,8 @@ pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-plugin.c \
 	pn-zigbee-source.c \
 	pn-zigbee-source.h \
+	pn-zigbee-sink.c \
+	pn-zigbee-sink.h \
 	pn-zigbee-switch.c \
 	pn-zigbee-switch.h \
 	pn-zigbee-relay-status.c \
@@ -36,6 +38,7 @@ pipnode_zigbee_la_LIBADD  = $(PIPNODE_LIBS)
 pnhelpdir   = $(PIPNODE_HELPDIR)
 pnhelp_DATA = \
 	help/PnZigbeeSource.html \
+	help/PnZigbeeSink.html \
 	help/PnZigbeeSwitch.html \
 	help/PnZigbeeRelayStatus.html \
 	help/PnZigbeeRelayCommand.html \
