@@ -23,7 +23,9 @@ pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-remote.c \
 	pn-zigbee-remote.h \
 	pn-zigbee-water-leak.c \
-	pn-zigbee-water-leak.h
+	pn-zigbee-water-leak.h \
+	pn-zigbee-permit-join.c \
+	pn-zigbee-permit-join.h
 
 pipnode_zigbee_la_CFLAGS  = $(PIPNODE_CFLAGS)
 pipnode_zigbee_la_LDFLAGS = -module -avoid-version -shared
@@ -38,5 +40,6 @@ pnhelp_DATA = \
 	help/PnZigbeeRelayStatus.html \
 	help/PnZigbeeRelayCommand.html \
 	help/PnZigbeeRemote.html \
-	help/PnZigbeeWaterLeak.html
+	help/PnZigbeeWaterLeak.html \
+	help/PnZigbeePermitJoin.html
 EXTRA_DIST  = $(pnhelp_DATA)

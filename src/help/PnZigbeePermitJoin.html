@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Zigbee Permit Join</title>
+</head>
+<body>
+  <h1>Zigbee Permit Join</h1>
+  <p>On any incoming message, emits a Zigbee2MQTT bridge command that opens
+     the pairing (permit-join) window for a preset interval.</p>
+  <p>The outgoing message targets
+     <code>zigbee2mqtt/bridge/request/permit_join</code> with a
+     <code>{ "value": true, "time": &lt;seconds&gt; }</code> payload, ready for
+     a downstream MQTT Sink.  The window length is configured in minutes
+     (default 4) and converted to seconds (minutes &times; 60).</p>
+</body>
+</html>

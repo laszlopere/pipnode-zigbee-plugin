@@ -60,6 +60,7 @@
 #include <pn-node-factory.h>
 #include <pn-plugin.h>
 
+#include "pn-zigbee-permit-join.h"
 #include "pn-zigbee-relay-command.h"
 #include "pn-zigbee-relay-status.h"
 #include "pn-zigbee-remote.h"
@@ -84,6 +85,7 @@ pn_plugin_init (PnNodeFactory *factory)
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_COMMAND);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_REMOTE);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_WATER_LEAK);
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_PERMIT_JOIN);
 
     return &info;
 }
