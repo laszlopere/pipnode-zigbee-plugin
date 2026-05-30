@@ -46,6 +46,7 @@
 #include <pn-device-form.h>
 #include <pn-device-combo.h>
 #include <pn-device-spin.h>
+#include <pn-inline-edit-label.h>
 #include <pn-vault.h>
 #include <pn-mqtt.h>
 #include <pn-mqtt-sink.h>
@@ -68,6 +69,11 @@
 /* The owned device-state key a per-control "get" refresh button carries
  * (item j), so its handler knows which property to re-request. */
 #define ZB_GET_KEY_QDATA "pn-zigbee-get-key"
+
+/* The owned last-committed description an inline-edit Description label
+ * carries, so its ::committed handler skips a no-op re-publish (the signal
+ * fires on every Enter / focus-out, even when nothing changed). */
+#define ZB_DESC_BASELINE_QDATA "pn-zigbee-desc-baseline"
 
 /* The hidden source always watches the whole Zigbee2MQTT tree. */
 #define ZB_DEV_SUBSCRIBE_TOPIC "zigbee2mqtt/#"
@@ -1366,94 +1372,28 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
     }
 }
 
-/* (d) Build one section of rows from a `features` array into @inner.
- * Leaf features become rows in a single grid titled @title; a nested
- * composite feature (one that itself has `features`) recurses into its
- * own sub-section.  No section is added when the grid stays empty. */
+/* Add @grid to @inner as an expander section titled @title, with a short dim
+ * @desc line below the title (inside the section body, above the grid) -- the
+ * "few words under each foldable" the dialog uses to explain every section.
+ * @desc may be NULL.  Sinks @grid (via pn_device_form_add_section). */
 static void
-zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
-                         const gchar *title, JsonArray *features,
-                         GPtrArray *page_controls)
+zb_add_section_desc (GtkWidget *inner, const gchar *title, const gchar *desc,
+                     GtkWidget *grid)
 {
-    GtkWidget *grid;
-    GPtrArray *nested;
-    guint      n, i;
-    gint       row = 0;
+    GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
 
-    if (features == NULL)
-        return;
-
-    grid = gtk_grid_new ();
-    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
-    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
-    g_object_ref_sink (grid);
-
-    nested = g_ptr_array_new ();
-    n = json_array_get_length (features);
-    for (i = 0; i < n; i++)
+    if (desc != NULL)
     {
-        JsonNode   *elem = json_array_get_element (features, i);
-        JsonObject *exp;
+        GtkWidget       *d  = gtk_label_new (desc);
+        GtkStyleContext *sc = gtk_widget_get_style_context (d);
 
-        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
-            continue;
-        exp = json_node_get_object (elem);
-        if (zb_object_array (exp, "features") != NULL)
-            g_ptr_array_add (nested, exp);   /* composite -> sub-section */
-        else
-            zb_build_expose_row (ctx, GTK_GRID (grid), &row, exp,
-                                 page_controls, ZB_TGT_SET, FALSE);
+        gtk_label_set_xalign     (GTK_LABEL (d), 0.0);
+        gtk_label_set_line_wrap  (GTK_LABEL (d), TRUE);
+        gtk_style_context_add_class (sc, "dim-label");
+        gtk_box_pack_start (GTK_BOX (box), d, FALSE, FALSE, 0);
     }
-
-    if (row > 0)
-        pn_device_form_add_section (inner, title, grid);   /* takes the ref */
-    else
-        gtk_widget_destroy (grid);
-    g_object_unref (grid);
-
-    for (i = 0; i < nested->len; i++)
-    {
-        JsonObject *exp = g_ptr_array_index (nested, i);
-        zb_add_features_section (ctx, inner, zb_expose_label (exp),
-                                 zb_object_array (exp, "features"),
-                                 page_controls);
-    }
-    g_ptr_array_unref (nested);
-}
-
-/* (j) A device page's title: the expose label, with the `endpoint` appended
- * ("Switch (left)") when present and not already part of the label, so a
- * multi-gang device's identically-typed gangs ("switch" / "switch") get
- * distinct, readable page tabs instead of two tabs with the same name.
- * Owned -- free with g_free. */
-static gchar *
-zb_page_title (JsonObject *exp)
-{
-    const gchar *label = zb_expose_label (exp);
-    const gchar *ep    = zb_peek_string (exp, "endpoint");
-
-    if (ep != NULL && *ep != '\0' && strstr (label, ep) == NULL)
-        return g_strdup_printf ("%s (%s)", label, ep);
-    return g_strdup (label);
-}
-
-/* (d) A top-level composite/typed expose (switch/light/cover/… or
- * "composite") becomes its own notebook page built from its features. */
-static void
-zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
-{
-    GtkWidget *inner;
-    GtkWidget *tab   = pn_device_form_new_tab (&inner);
-    gchar     *title = zb_page_title (exp);    /* (j) endpoint-disambiguated */
-    GPtrArray *page  = g_ptr_array_new ();      /* borrowed settable controls */
-
-    zb_add_features_section (ctx, inner, title,
-                             zb_object_array (exp, "features"), page);
-    zb_add_page_apply (ctx, inner, page);      /* (g) consumes page */
-    pn_device_dialog_append_page (ctx->shell, tab, title);
-    g_ptr_array_add (ctx->device_pages, tab);
-    gtk_widget_show_all (tab);
-    g_free (title);
+    gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
+    pn_device_form_add_section (inner, title, box);   /* sinks box (+ grid) */
 }
 
 /* Append a read-only "key | value" row to @grid for @value (owned, freed
@@ -1474,24 +1414,95 @@ zb_add_readonly_row (GtkGrid *grid, gint *row, const gchar *key, gchar *value)
 /*  Device page: editable device-level (all-devices) settings          */
 /* ------------------------------------------------------------------ */
 
-/* Build an editable text-entry row bound to @key on channel @target, seeded
- * from @seed (borrowed, may be NULL), tracked and filed under @page. */
-static void
-zb_add_text_control (ZbDevCtx *ctx, GtkGrid *grid, gint *row, GPtrArray *page,
-                     const gchar *label, const gchar *key, ZbTarget target,
-                     const gchar *seed, const gchar *tip)
+/* Build a row with @label and a PnInlineEditLabel on the right, seeded from
+ * @seed (borrowed, may be NULL).  Returns the inline-edit widget so the caller
+ * wires its ::committed handler.  Unlike a tracked control, an inline edit
+ * commits live on Enter / focus-out, so it is not part of a page's Apply set. */
+static GtkWidget *
+zb_add_inline_row (GtkGrid *grid, gint *row, const gchar *label,
+                   const gchar *seed, const gchar *tip)
 {
-    GtkWidget *entry = GTK_WIDGET (
-            pn_device_form_attach_entry_row (grid, (*row)++, label));
-    ZbControl *c;
+    GtkWidget *cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+    GtkWidget *edit = pn_inline_edit_label_new ();
 
     if (seed != NULL)
-        gtk_entry_set_text (GTK_ENTRY (entry), seed);
+        pn_inline_edit_label_set_text (PN_INLINE_EDIT_LABEL (edit), seed);
     if (tip != NULL)
-        gtk_widget_set_tooltip_text (entry, tip);
-    c = zb_track_control (ctx, g_strdup (key), ZB_CTL_TEXT, target, entry,
-                          NULL, NULL);
-    g_ptr_array_add (page, c);
+        gtk_widget_set_tooltip_text (edit, tip);
+    gtk_box_pack_start (GTK_BOX (cell), edit, TRUE, TRUE, 0);
+    return edit;
+}
+
+/* The friendly name was edited inline.  Rename the device (the new name has no
+ * other Z2M channel) unless it is empty or unchanged -- ::committed fires on
+ * every Enter / focus-out, so skip the no-op.  selected_name holds the current
+ * name and is retargeted optimistically; Z2M re-publishes bridge/devices on
+ * success, refreshing the list. */
+static void
+zb_on_name_committed (PnInlineEditLabel *edit, const gchar *text,
+                      gpointer user_data)
+{
+    ZbDevCtx   *ctx = user_data;
+    JsonObject *req;
+
+    (void) edit;
+    if (ctx->selected_name == NULL || text == NULL || *text == '\0')
+        return;
+    if (g_strcmp0 (text, ctx->selected_name) == 0)
+        return;
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before renaming.");
+        return;
+    }
+
+    req = json_object_new ();
+    json_object_set_string_member (req, "from", ctx->selected_name);
+    json_object_set_string_member (req, "to",   text);
+    zb_publish_to (ctx, ZB_DEV_RENAME_TOPIC, req);    /* consumes req */
+
+    pn_device_dialog_set_statusf (ctx->shell, "Renaming %s to %s…",
+                                  ctx->selected_name, text);
+    g_free (ctx->selected_name);
+    ctx->selected_name = g_strdup (text);
+}
+
+/* The description was edited inline.  Write it through device/options, skipping
+ * a no-op against the last-committed value carried on the widget. */
+static void
+zb_on_desc_committed (PnInlineEditLabel *edit, const gchar *text,
+                      gpointer user_data)
+{
+    ZbDevCtx    *ctx  = user_data;
+    const gchar *base = g_object_get_data (G_OBJECT (edit),
+                                           ZB_DESC_BASELINE_QDATA);
+    JsonObject  *req, *opts;
+
+    if (ctx->selected_name == NULL)
+        return;
+    if (text == NULL)
+        text = "";
+    if (g_strcmp0 (text, base != NULL ? base : "") == 0)
+        return;
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before editing.");
+        return;
+    }
+
+    opts = json_object_new ();
+    json_object_set_string_member (opts, "description", text);
+    req  = json_object_new ();
+    json_object_set_string_member (req, "id", ctx->selected_name);
+    json_object_set_object_member (req, "options", opts);   /* transfers opts */
+    zb_publish_to (ctx, ZB_DEV_OPTIONS_TOPIC, req);         /* consumes req */
+
+    g_object_set_data_full (G_OBJECT (edit), ZB_DESC_BASELINE_QDATA,
+                            g_strdup (text), g_free);
+    pn_device_dialog_set_statusf (ctx->shell, "Updated description of %s.",
+                                  ctx->selected_name);
 }
 
 /* Build an editable boolean switch row bound to @key (device options channel),
@@ -1619,14 +1630,11 @@ zb_on_remove_clicked (GtkButton *button, gpointer user_data)
     gtk_widget_destroy (dialog);
 }
 
-/* (i, this change) The always-present "Device" page: the device-level
- * settings every device shares -- editable friendly name, description and the
- * generic Z2M per-device options -- plus a read-only addressing/vendor info
- * section and a guarded Remove button.  Built directly from @dev (the
- * inventory record), not from ctx->state: friendly_name / disabled /
- * description seed from the record; the other options have no live source over
- * MQTT and seed from their Z2M defaults (only a change the user makes is
- * published, and Z2M merges, so unseeded options are never clobbered). */
+/* The always-present "Device" page (first device page, generic -> special):
+ * a "Device" section with the friendly name + description edited inline and
+ * committed live (rename / device options), a read-only "Info" section off the
+ * inventory record, and a separate "Remove device" foldable.  The generic
+ * per-device options live on the Options page, not here. */
 static void
 zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
 {
@@ -1634,70 +1642,37 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
     GtkWidget   *tab   = pn_device_form_new_tab (&inner);
     GtkWidget   *grid  = gtk_grid_new ();
     GtkWidget   *info  = gtk_grid_new ();
-    GtkWidget   *rmbox, *remove;
-    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed editable controls */
+    GtkWidget   *rmbox, *remove, *name_edit, *desc_edit;
     JsonObject  *def   = NULL;
     JsonNode    *dn;
     const gchar *fname = zb_peek_string (dev, "friendly_name");
     const gchar *descr = zb_peek_string (dev, "description");
-    gboolean     disabled;
-    JsonNode    *dis;
     gint         row   = 0;
 
+    /* Device: identity, edited inline and committed live. */
     gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
     gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    name_edit = zb_add_inline_row (GTK_GRID (grid), &row, "Friendly name",
+                                   fname,
+                                   "The name this device is published under "
+                                   "(zigbee2mqtt/<name>).");
+    g_signal_connect (name_edit, "committed",
+                      G_CALLBACK (zb_on_name_committed), ctx);
+    desc_edit = zb_add_inline_row (GTK_GRID (grid), &row, "Description", descr,
+                                   "Free-text note stored with the device.");
+    g_object_set_data_full (G_OBJECT (desc_edit), ZB_DESC_BASELINE_QDATA,
+                            g_strdup (descr != NULL ? descr : ""), g_free);
+    g_signal_connect (desc_edit, "committed",
+                      G_CALLBACK (zb_on_desc_committed), ctx);
+    zb_add_section_desc (inner, "Device",
+                         "Give this device a friendly name and an optional "
+                         "note so you can recognise it later. The name labels "
+                         "it everywhere in the system, so something like "
+                         "\"Living room lamp\" works well. Click the pencil, "
+                         "type, and press Enter to save \xe2\x80\x94 each field "
+                         "saves on its own.", grid);
 
-    /* Editable, seeded accurately from the inventory record. */
-    zb_add_text_control (ctx, GTK_GRID (grid), &row, page, "Friendly name",
-                         "friendly_name", ZB_TGT_RENAME, fname,
-                         "The name this device is published under "
-                         "(zigbee2mqtt/<name>). Renaming republishes the "
-                         "device list.");
-    zb_add_text_control (ctx, GTK_GRID (grid), &row, page, "Description",
-                         "description", ZB_TGT_OPTIONS, descr,
-                         "Free-text note stored with the device in Z2M.");
-
-    dis      = json_object_has_member (dev, "disabled")
-                   ? json_object_get_member (dev, "disabled") : NULL;
-    disabled = zb_binary_is_on (dis, NULL);
-    zb_add_switch_control (ctx, GTK_GRID (grid), &row, page, "Disabled",
-                           "disabled", disabled,
-                           "Exclude the device from network scans, "
-                           "availability and group state.");
-
-    pn_device_form_add_section (inner, "Device", grid);
-
-    /* Generic per-device options with no live source over MQTT -- seeded from
-     * Z2M defaults.  Only a value the user changes is sent (device/options
-     * merges), so a default shown here never overwrites an unseen real value. */
-    {
-        GtkWidget *opt = gtk_grid_new ();
-        gint       orow = 0;
-
-        gtk_grid_set_row_spacing    (GTK_GRID (opt), 8);
-        gtk_grid_set_column_spacing (GTK_GRID (opt), 12);
-        zb_add_switch_control (ctx, GTK_GRID (opt), &orow, page, "Retain",
-                               "retain", FALSE,
-                               "Retain this device's MQTT messages.");
-        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Retention",
-                            "retention", 0, 0, 1000000, "s",
-                            "MQTT message expiry (requires retain + MQTT v5).");
-        zb_add_switch_control (ctx, GTK_GRID (opt), &orow, page, "Optimistic",
-                               "optimistic", TRUE,
-                               "Publish optimistic state after a /set.");
-        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Debounce",
-                            "debounce", 0, 0, 1000000, "s",
-                            "Debounce this device's messages.");
-        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Throttle",
-                            "throttle", 0, 0, 1000000, "s",
-                            "Minimum time between published payloads.");
-        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "QoS",
-                            "qos", 0, 0, 2, NULL,
-                            "MQTT QoS level for this device's messages.");
-        pn_device_form_add_section (inner, "Options (defaults shown)", opt);
-    }
-
-    /* Read-only addressing / vendor info. */
+    /* Info: read-only addressing / vendor. */
     gtk_grid_set_row_spacing    (GTK_GRID (info), 8);
     gtk_grid_set_column_spacing (GTK_GRID (info), 12);
     row = 0;
@@ -1724,7 +1699,14 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
     }
     if (row > 0)
     {
-        pn_device_form_add_section (inner, "Info", info);
+        zb_add_section_desc (inner, "Info",
+                             "These are the device's fixed technical details: "
+                             "its unique hardware address (a bit like a serial "
+                             "number), the kind of device, and who made it. "
+                             "Nothing here can be changed \xe2\x80\x94 it is "
+                             "shown only so you can tell exactly which device "
+                             "this is, and it helps if you ever ask for "
+                             "support.", info);
     }
     else
     {
@@ -1733,13 +1715,9 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
         g_object_unref (info);
     }
 
-    /* Apply (g) publishes the editable controls above, partitioned by target
-     * (rename / device options).  Then a right-aligned destructive Remove. */
-    zb_add_page_apply (ctx, inner, page);      /* consumes page */
-
+    /* Remove: its own foldable section. */
     rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
-    gtk_widget_set_margin_top (rmbox, 8);
+    gtk_widget_set_halign (rmbox, GTK_ALIGN_START);
     remove = gtk_button_new_with_label ("Remove device\xe2\x80\xa6");
     gtk_style_context_add_class (gtk_widget_get_style_context (remove),
                                  "destructive-action");
@@ -1748,76 +1726,126 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
     g_signal_connect (remove, "clicked",
                       G_CALLBACK (zb_on_remove_clicked), ctx);
     gtk_box_pack_start (GTK_BOX (rmbox), remove, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (inner), rmbox, FALSE, FALSE, 0);
+    zb_add_section_desc (inner, "Remove device",
+                         "Removing a device disconnects it from your wireless "
+                         "network and erases it from the system. Do this if you "
+                         "no longer use it, or want to set it up elsewhere. "
+                         "This cannot be undone: to use it again you would have "
+                         "to add it back from scratch (\"pairing\"), usually by "
+                         "pressing a button on the device. If it is broken or "
+                         "already gone, the confirmation box offers a \"force\" "
+                         "option that removes it anyway.", rmbox);
 
     pn_device_dialog_append_page (ctx->shell, tab, "Device");
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
 }
 
-/* (i) A read-only "Options" page surfacing definition.options (the Z2M
- * device options -- retain / transition / state_action / legacy …).  Shown
- * read-only on purpose: these are configured through Z2M's bridge request
- * API, not the "<name>/set" path the editable pages publish to, so they are
- * surfaced (label + description tooltip + default value) without an Apply
- * that would write to the wrong place.  Composite option groups are rare;
- * one would render as a single value row rather than recursing. */
+/* Fill @grid with the generic per-device options every device shares (the
+ * "all-devices" properties), as editable controls routed to device/options.
+ * `disabled` seeds accurately from the inventory record; the rest have no live
+ * source over MQTT and seed from their Z2M defaults -- only a value the user
+ * changes is sent (device/options merges), so a default shown never overwrites
+ * an unseen real value.  Controls are filed under @page for the page Apply. */
 static void
-zb_build_options_page (ZbDevCtx *ctx, JsonArray *options)
+zb_add_generic_options (ZbDevCtx *ctx, GtkGrid *grid, JsonObject *dev,
+                        GPtrArray *page)
+{
+    JsonNode *dis = json_object_has_member (dev, "disabled")
+                        ? json_object_get_member (dev, "disabled") : NULL;
+    gint      row = 0;
+
+    zb_add_switch_control (ctx, grid, &row, page, "Disabled", "disabled",
+                           zb_binary_is_on (dis, NULL),
+                           "Exclude the device from network scans, "
+                           "availability and group state.");
+    zb_add_switch_control (ctx, grid, &row, page, "Retain", "retain", FALSE,
+                           "Retain this device's MQTT messages.");
+    zb_add_int_control (ctx, grid, &row, page, "Retention", "retention",
+                        0, 0, 1000000, "s",
+                        "MQTT message expiry (requires retain + MQTT v5).");
+    zb_add_switch_control (ctx, grid, &row, page, "Optimistic", "optimistic",
+                           TRUE, "Publish optimistic state after a /set.");
+    zb_add_int_control (ctx, grid, &row, page, "Debounce", "debounce",
+                        0, 0, 1000000, "s", "Debounce this device's messages.");
+    zb_add_int_control (ctx, grid, &row, page, "Throttle", "throttle",
+                        0, 0, 1000000, "s",
+                        "Minimum time between published payloads.");
+    zb_add_int_control (ctx, grid, &row, page, "QoS", "qos", 0, 0, 2, NULL,
+                        "MQTT QoS level for this device's messages.");
+}
+
+/* The always-present, editable "Options" page (last device page, most
+ * special).  Leads with the generic per-device options (above), then -- when
+ * the device's definition carries options (transition / legacy / invert_cover
+ * …) -- a second section built from them, also editable and routed to
+ * device/options, seeded from value_default.  One page Apply publishes both;
+ * force_settable=TRUE since option exposes often omit the access bitmap. */
+static void
+zb_build_options_page (ZbDevCtx *ctx, JsonObject *dev, JsonArray *options)
 {
     GtkWidget *inner;
-    GtkWidget *tab;
-    GtkWidget *grid;
-    guint      n, i;
-    gint       row = 0;
+    GtkWidget *tab  = pn_device_form_new_tab (&inner);
+    GtkWidget *gen  = gtk_grid_new ();
+    GPtrArray *page = g_ptr_array_new ();      /* borrowed editable controls */
+    guint      n    = (options != NULL) ? json_array_get_length (options) : 0;
+    guint      i;
 
-    GPtrArray *page;
+    gtk_grid_set_row_spacing    (GTK_GRID (gen), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (gen), 12);
+    zb_add_generic_options (ctx, GTK_GRID (gen), dev, page);
+    zb_add_section_desc (inner, "Options (defaults shown)",
+                         "These are advanced, behind-the-scenes settings for "
+                         "how the system handles this device's messages \xe2\x80\x94 "
+                         "such as how long to remember its last status. Most "
+                         "people never need them, so the safe choice is to "
+                         "leave them alone. Because the system cannot read "
+                         "these values back, the boxes show the usual defaults "
+                         "rather than what is in effect; only a box you change "
+                         "is sent, so anything you leave alone stays as it "
+                         "was.", gen);
 
-    n = json_array_get_length (options);
-    if (n == 0)
-        return;
-
-    tab  = pn_device_form_new_tab (&inner);
-    grid = gtk_grid_new ();
-    page = g_ptr_array_new ();                 /* borrowed editable controls */
-    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
-    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
-
-    /* Each option is editable, routed to the device/options request and seeded
-     * from value_default (no live source over MQTT).  force_settable=TRUE since
-     * option exposes often omit the access bitmap; a composite option (one with
-     * `features`) is rare and surfaces as a read-only raw row via the leaf
-     * path rather than recursing. */
-    for (i = 0; i < n; i++)
+    if (n > 0)
     {
-        JsonNode   *elem = json_array_get_element (options, i);
-        JsonObject *opt;
+        GtkWidget *grid = gtk_grid_new ();
+        gint       row  = 0;
 
-        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
-            continue;
-        opt = json_node_get_object (elem);
-        zb_build_expose_row (ctx, GTK_GRID (grid), &row, opt, page,
-                             ZB_TGT_OPTIONS, TRUE);
+        gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+        gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+        for (i = 0; i < n; i++)
+        {
+            JsonNode *elem = json_array_get_element (options, i);
+
+            if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+                continue;
+            zb_build_expose_row (ctx, GTK_GRID (grid), &row,
+                                 json_node_get_object (elem), page,
+                                 ZB_TGT_OPTIONS, TRUE);
+        }
+        if (row > 0)
+        {
+            zb_add_section_desc (inner, "Device options (defaults shown)",
+                                 "These extra options come from the device "
+                                 "itself and fine-tune how it behaves \xe2\x80\x94 "
+                                 "such as how smoothly a light fades. As with "
+                                 "the section above, the boxes show the usual "
+                                 "defaults rather than the current values, and "
+                                 "only a box you change is sent. If you are "
+                                 "unsure what one does, leave it alone.", grid);
+        }
+        else
+        {
+            g_object_ref_sink (grid);
+            gtk_widget_destroy (grid);
+            g_object_unref (grid);
+        }
     }
 
-    if (row > 0)
-    {
-        pn_device_form_add_section (inner, "Options (defaults shown)", grid);
-        zb_add_page_apply (ctx, inner, page);  /* (g) consumes page */
-        pn_device_dialog_append_page (ctx->shell, tab, "Options");
-        g_ptr_array_add (ctx->device_pages, tab);
-        gtk_widget_show_all (tab);
-    }
-    else
-    {
-        g_ptr_array_unref (page);
-        g_object_ref_sink (tab);
-        gtk_widget_destroy (tab);
-        g_object_unref (tab);
-        g_object_ref_sink (grid);
-        gtk_widget_destroy (grid);
-        g_object_unref (grid);
-    }
+    /* The generic section always adds controls, so the Apply is always wired. */
+    zb_add_page_apply (ctx, inner, page);      /* (g) consumes page */
+    pn_device_dialog_append_page (ctx->shell, tab, "Options");
+    g_ptr_array_add (ctx->device_pages, tab);
+    gtk_widget_show_all (tab);
 }
 
 /* Build one "Settings"-style page titled @title from the bare exposes in
@@ -1839,7 +1867,13 @@ zb_build_settings_page (ZbDevCtx *ctx, GPtrArray *exps, const gchar *title)
                              g_ptr_array_index (exps, i), page,
                              ZB_TGT_SET, FALSE);
 
-    pn_device_form_add_section (inner, title, grid);
+    zb_add_section_desc (inner, title,
+                         "These are the adjustable features this device offers "
+                         "\xe2\x80\x94 the list depends on what it can do, so it "
+                         "differs from one device to the next. Changing a value "
+                         "sends it straight to the device, which should react "
+                         "within a second or two. If a value springs back, the "
+                         "device refused or adjusted it.", grid);
     zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
     pn_device_dialog_append_page (ctx->shell, tab, title);
     g_ptr_array_add (ctx->device_pages, tab);
@@ -1901,13 +1935,13 @@ zb_build_bare_pages (ZbDevCtx *ctx, GPtrArray *bare)
     g_ptr_array_unref (order);
 }
 
-/* (d, i) Walk the whole exposes tree of the selected device into pages:
- * each top-level composite/typed expose gets its own page; the bare
- * top-level exposes (binary/numeric/enum/text/…) collect under a single
- * "Settings" page.  Every device then gets an editable "Device" page (the
- * device-level all-devices settings + read-only info + Remove), and
- * definition.options (when present) gets its own editable "Options" page.
- * Then jump to the first device page. */
+/* Walk the selected device into pages, ordered generic -> special after the
+ * static "Broker" page: the editable "Device" page (identity + info + remove),
+ * then the "Settings" page(s) built from the device's bare settable exposes,
+ * then the editable "Options" page (device-level options + definition.options).
+ * Top-level composite/typed exposes (switch/light/…) are intentionally skipped
+ * -- this dialog configures the device, it does not operate it.  Then jump to
+ * the Device page. */
 static void
 zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
                        JsonArray *exposes, JsonArray *options)
@@ -1915,6 +1949,13 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
     GPtrArray *bare = g_ptr_array_new ();
     guint      n, i;
 
+    /* Device page first. */
+    zb_build_device_page (ctx, dev);
+
+    /* Settings page(s) from the bare (leaf, settable) top-level exposes,
+     * split by endpoint for a multi-gang device that surfaces them flat.  A
+     * composite expose (one carrying `features`) is the operational control
+     * (the on/off "switch" page) and is not shown here. */
     if (exposes != NULL)
     {
         n = json_array_get_length (exposes);
@@ -1926,29 +1967,17 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
             if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
                 continue;
             exp = json_node_get_object (elem);
-            if (zb_object_array (exp, "features") != NULL)
-                zb_build_composite_page (ctx, exp);
-            else
+            if (zb_object_array (exp, "features") == NULL)
                 g_ptr_array_add (bare, exp);
         }
     }
-
-    /* (j) The bare top-level exposes become Settings page(s), split by
-     * endpoint for a multi-gang device that surfaces them flat. */
     zb_build_bare_pages (ctx, bare);
     g_ptr_array_unref (bare);
 
-    /* The always-present editable Device page: friendly name, the generic
-     * per-device options and a guarded Remove, plus read-only addressing
-     * info.  Also guarantees the pane is never blank for a device with no
-     * editable exposes (the Coordinator, empty exposes). */
-    zb_build_device_page (ctx, dev);
+    /* Options page last (device-level options + definition.options). */
+    zb_build_options_page (ctx, dev, options);
 
-    /* Surface the device's definition.options on their own editable page. */
-    if (options != NULL)
-        zb_build_options_page (ctx, options);
-
-    /* The static "Broker" page is index 0; show the first device page. */
+    /* The static "Broker" page is index 0; show the Device page. */
     if (ctx->device_pages->len > 0)
         pn_device_dialog_set_current_page (ctx->shell, 1);
 }
@@ -2160,7 +2189,16 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                       G_CALLBACK (zb_on_apply_clicked), ctx);
     gtk_grid_attach (GTK_GRID (grid), apply, 1, row++, 1, 1);
 
-    pn_device_form_add_section (inner, "MQTT Broker", grid);
+    zb_add_section_desc (inner, "MQTT Broker",
+                         "Your smart devices do not talk to this program "
+                         "directly \xe2\x80\x94 their messages pass through a "
+                         "small relay called an MQTT broker, rather like "
+                         "letters through a post office. Choose which broker to "
+                         "connect to and press Apply; \"Default\" uses the one "
+                         "your system already set up, which is usually right. "
+                         "Once connected, your devices appear in the list on "
+                         "the left and the counter shows messages arriving.",
+                         grid);
     pn_device_dialog_append_page (ctx->shell, tab, "Broker");
 
     /* Left-hand device list.  We do not auto-scan (there is nothing to
