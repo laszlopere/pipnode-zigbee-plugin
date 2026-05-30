@@ -8,7 +8,7 @@
 # -shared        : never emit a static archive.
 plugindir = $(PIPNODE_PLUGINDIR)
 
-plugin_LTLIBRARIES = pipnode_zigbee.la
+plugin_LTLIBRARIES = pipnode_zigbee.la pipnode_zigbee-gui.la
 
 pipnode_zigbee_la_SOURCES = \
 	pn-zigbee-plugin.c \
@@ -32,6 +32,16 @@ pipnode_zigbee_la_SOURCES = \
 pipnode_zigbee_la_CFLAGS  = $(PIPNODE_CFLAGS)
 pipnode_zigbee_la_LDFLAGS = -module -avoid-version -shared
 pipnode_zigbee_la_LIBADD  = $(PIPNODE_LIBS)
+
+# GUI companion module.  Automake canonicalises the `pipnode_zigbee-gui.la`
+# target to the `pipnode_zigbee_gui_la_` variable prefix.  It links the
+# GTK tier (pipnode-gui pulls in libpipnode-gui + libpipnode-core + GTK),
+# exports pn_plugin_gui_init(), and registers the "Zigbee" Devices-menu
+# provider.  Same -module/-avoid-version/-shared flags as the logic half.
+pipnode_zigbee_gui_la_SOURCES = pn-zigbee-gui.c
+pipnode_zigbee_gui_la_CFLAGS  = $(PIPNODE_GUI_CFLAGS)
+pipnode_zigbee_gui_la_LDFLAGS = -module -avoid-version -shared
+pipnode_zigbee_gui_la_LIBADD  = $(PIPNODE_GUI_LIBS)
 
 # Per-node HTML help pages, installed into the directory the help browser
 # scans ($(PIPNODE_HELPDIR), from pipnode-core.pc).

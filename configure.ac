@@ -31,6 +31,13 @@ PKG_PROG_PKG_CONFIG
 # link line a node needs.
 PKG_CHECK_MODULES([PIPNODE], [pipnode-core >= 0.2.0 gmodule-2.0])
 
+# GUI companion tier.  The Devices-menu dialog (pn-zigbee-gui.c) is a
+# separate loadable module that links the GTK tier via pipnode-gui.pc,
+# which transitively pulls in pipnode-core + GTK.  The host auto-loads
+# the "-gui" sibling next to the logic .so (see PLUGINS section 17) and
+# calls its pn_plugin_gui_init(); the headless logic .so never links it.
+PKG_CHECK_MODULES([PIPNODE_GUI], [pipnode-gui >= 0.2.0])
+
 # Pull the host's canonical install directories straight out of
 # pipnode-core.pc so we never hard-code $libdir/pipnode/plugins.  These
 # are the directories the host actually scans at run-time (see the
