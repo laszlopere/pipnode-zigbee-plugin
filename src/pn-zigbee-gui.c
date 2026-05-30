@@ -45,6 +45,7 @@
 #include <pn-device-dialog.h>
 #include <pn-device-form.h>
 #include <pn-device-combo.h>
+#include <pn-device-spin.h>
 #include <pn-vault.h>
 #include <pn-mqtt.h>
 #include <pn-mqtt-profile.h>
@@ -69,6 +70,32 @@
  * array of device records -- delivered right after subscribe and again
  * whenever the device set changes.  We read it to populate the list. */
 #define ZB_DEV_DEVICES_TOPIC "zigbee2mqtt/bridge/devices"
+
+/* What kind of widget a built settings control is, so the value-seeding
+ * pass (item f) and, later, write-back (item g) can read/write it without
+ * re-deriving the expose type. */
+typedef enum
+{
+    ZB_CTL_READONLY,   /* a value label (pn_device_form_attach_label_row) */
+    ZB_CTL_BINARY,     /* a GtkSwitch */
+    ZB_CTL_NUMERIC,    /* a PnDeviceSpin */
+    ZB_CTL_ENUM,       /* a PnDeviceCombo */
+    ZB_CTL_TEXT        /* a GtkEntry */
+} ZbCtlKind;
+
+/* One built settings control, bound to the device-state JSON key it shows.
+ * Tracked per-dialog and cleared in lockstep with the device pages (the
+ * widget itself is owned by its notebook page; this record only borrows
+ * it).  value_on/value_off carry a binary expose's string mapping so the
+ * seed pass can turn "ON"/"OFF" (or a JSON bool) into a switch state. */
+typedef struct
+{
+    gchar      *key;        /* resolved device-state property key (owned) */
+    ZbCtlKind   kind;
+    GtkWidget  *widget;     /* the control or value label (borrowed) */
+    gchar      *value_on;   /* binary mapping, owned; NULL -> JSON bool */
+    gchar      *value_off;
+} ZbControl;
 
 typedef struct
 {
@@ -110,7 +137,24 @@ typedef struct
      * re-select or dialog close can drop exactly those, keeping the
      * static "Broker" page.  Never NULL once the dialog is built. */
     GPtrArray       *device_pages;
+
+    /* The settings controls built into those pages (owned ZbControl*; the
+     * array frees them).  Borrows each control widget from its page, so it
+     * is cleared together with device_pages.  The seed/write-back passes
+     * iterate it.  Never NULL once the dialog is built. */
+    GPtrArray       *controls;
 } ZbDevCtx;
+
+static void
+zb_control_free (gpointer data)
+{
+    ZbControl *c = data;
+
+    g_free (c->key);
+    g_free (c->value_on);
+    g_free (c->value_off);
+    g_free (c);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Hidden source lifecycle                                            */
@@ -160,9 +204,11 @@ zb_clear_device_pages (ZbDevCtx *ctx)
         }
     }
 
-    /* Removing a page destroys it and, with it, the per-control bindings
-     * held on the page widgets (item e wires those up). */
+    /* Removing a page destroys its control widgets; drop our borrowed
+     * bindings to them in lockstep so none dangle. */
     g_ptr_array_set_size (ctx->device_pages, 0);
+    if (ctx->controls != NULL)
+        g_ptr_array_set_size (ctx->controls, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,8 +356,9 @@ zb_capture_state (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
 
     g_hash_table_insert (ctx->state, g_strdup (name), json_node_copy (payload));
 
-    /* When this is the device on screen, items f/h repaint its live
-     * controls from the refreshed state here. */
+    /* When this is the device on screen, item h repaints its live
+     * controls from the refreshed state here (the initial seed at select
+     * time is item f, in zb_seed_controls). */
 }
 
 /* Parse a bridge/devices publish: store a private copy of the inventory
@@ -470,6 +517,486 @@ zb_on_scan (gpointer user_data)
                 ctx->shell, "Pick a broker and press Apply to discover devices.");
 }
 
+/* ------------------------------------------------------------------ */
+/*  Exposes tree -> settings pages (items d, e, f)                      */
+/* ------------------------------------------------------------------ */
+
+/* Borrow the @key array member off @obj, or NULL when absent / not an
+ * array.  Valid only while @obj lives. */
+static JsonArray *
+zb_object_array (JsonObject *obj, const gchar *key)
+{
+    JsonNode *n;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return NULL;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_ARRAY (n))
+        return NULL;
+    return json_node_get_array (n);
+}
+
+/* A numeric member of @obj as a double, or @fallback when absent / not a
+ * number.  Z2M sends value_min/value_max/value_step/access as JSON
+ * numbers; an integer arrives as G_TYPE_INT64. */
+static gdouble
+zb_peek_double (JsonObject *obj, const gchar *key, gdouble fallback)
+{
+    JsonNode *n;
+    GType     t;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return fallback;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_VALUE (n))
+        return fallback;
+    t = json_node_get_value_type (n);
+    if (t == G_TYPE_INT64)
+        return (gdouble) json_node_get_int (n);
+    if (t == G_TYPE_DOUBLE)
+        return json_node_get_double (n);
+    return fallback;
+}
+
+/* The Z2M access bitmap of an expose (1=published, 2=settable,
+ * 4=gettable), or 0 when absent. */
+static gint
+zb_expose_access (JsonObject *exp)
+{
+    return (gint) zb_peek_double (exp, "access", 0.0);
+}
+
+/* The human label for an expose: label, then name, then property, then
+ * type, then a generic fallback.  Borrowed -- valid while @exp lives. */
+static const gchar *
+zb_expose_label (JsonObject *exp)
+{
+    const gchar *s;
+
+    if ((s = zb_peek_string (exp, "label"))    != NULL) return s;
+    if ((s = zb_peek_string (exp, "name"))     != NULL) return s;
+    if ((s = zb_peek_string (exp, "property")) != NULL) return s;
+    if ((s = zb_peek_string (exp, "type"))     != NULL) return s;
+    return "Setting";
+}
+
+/* The device-state JSON key an expose maps to (owned), or NULL when it
+ * has neither a property nor a name.  Z2M usually already bakes the
+ * endpoint into `property` (a two-gang switch exposes property
+ * "state_left" with endpoint "left"), so we only append "_<endpoint>"
+ * when it is not already there -- never doubling it into "state_left_left". */
+static gchar *
+zb_expose_key (JsonObject *exp)
+{
+    const gchar *prop = zb_peek_string (exp, "property");
+    const gchar *name = zb_peek_string (exp, "name");
+    const gchar *ep   = zb_peek_string (exp, "endpoint");
+    const gchar *base = (prop != NULL) ? prop : name;
+
+    if (base == NULL)
+        return NULL;
+    if (ep != NULL && *ep != '\0')
+    {
+        gchar    *suffix = g_strconcat ("_", ep, NULL);
+        gboolean  has    = g_str_has_suffix (base, suffix);
+        gchar    *key    = has ? g_strdup (base)
+                               : g_strconcat (base, "_", ep, NULL);
+        g_free (suffix);
+        return key;
+    }
+    return g_strdup (base);
+}
+
+/* A JSON scalar (or, failing that, the compact JSON text) as a display
+ * string (owned) -- the read-only value rows, enum-combo ids and text
+ * entries seed through this. */
+static gchar *
+zb_json_to_display (JsonNode *node)
+{
+    if (node != NULL && JSON_NODE_HOLDS_VALUE (node))
+    {
+        GType t = json_node_get_value_type (node);
+
+        if (t == G_TYPE_STRING)
+            return g_strdup (json_node_get_string (node));
+        if (t == G_TYPE_BOOLEAN)
+            return g_strdup (json_node_get_boolean (node) ? "true" : "false");
+        if (t == G_TYPE_INT64)
+            return g_strdup_printf ("%" G_GINT64_FORMAT, json_node_get_int (node));
+        if (t == G_TYPE_DOUBLE)
+            return g_strdup_printf ("%g", json_node_get_double (node));
+    }
+    if (node == NULL || JSON_NODE_HOLDS_NULL (node))
+        return g_strdup ("");
+    return json_to_string (node, FALSE);   /* object / array -> compact */
+}
+
+/* A JSON scalar as a double, for seeding a numeric spin.  TRUE on
+ * success. */
+static gboolean
+zb_node_get_double (JsonNode *node, gdouble *out)
+{
+    GType t;
+
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return FALSE;
+    t = json_node_get_value_type (node);
+    if (t == G_TYPE_INT64)   { *out = (gdouble) json_node_get_int (node);     return TRUE; }
+    if (t == G_TYPE_DOUBLE)  { *out = json_node_get_double (node);            return TRUE; }
+    if (t == G_TYPE_BOOLEAN) { *out = json_node_get_boolean (node) ? 1 : 0;   return TRUE; }
+    return FALSE;
+}
+
+/* Is a binary expose's value "on", given its value_on mapping?  Accepts a
+ * JSON bool, the value_on string (default "ON"/"true" when unmapped) or a
+ * non-zero number. */
+static gboolean
+zb_binary_is_on (JsonNode *node, const gchar *value_on)
+{
+    GType t;
+
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return FALSE;
+    t = json_node_get_value_type (node);
+    if (t == G_TYPE_BOOLEAN)
+        return json_node_get_boolean (node);
+    if (t == G_TYPE_STRING)
+    {
+        const gchar *s = json_node_get_string (node);
+        if (s == NULL)
+            return FALSE;
+        if (value_on != NULL)
+            return g_strcmp0 (s, value_on) == 0;
+        return g_ascii_strcasecmp (s, "ON")   == 0 ||
+               g_ascii_strcasecmp (s, "true") == 0;
+    }
+    if (t == G_TYPE_INT64)
+        return json_node_get_int (node) != 0;
+    if (t == G_TYPE_DOUBLE)
+        return json_node_get_double (node) != 0.0;
+    return FALSE;
+}
+
+/* Derive a spin button's range from a numeric expose, with permissive
+ * fallbacks for an expose that omits the bounds. */
+static void
+zb_numeric_range (JsonObject *exp, gdouble *min, gdouble *max, gdouble *step)
+{
+    *min  = zb_peek_double (exp, "value_min",  -1000000.0);
+    *max  = zb_peek_double (exp, "value_max",   1000000.0);
+    *step = zb_peek_double (exp, "value_step",  1.0);
+    if (*step <= 0.0)
+        *step = 1.0;
+    if (*max <= *min)
+    {
+        *min = -1000000.0;
+        *max =  1000000.0;
+    }
+}
+
+/* Record a built control bound to @key for the seed / write-back passes.
+ * Takes ownership of @key, @value_on and @value_off. */
+static void
+zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind,
+                  GtkWidget *widget, gchar *value_on, gchar *value_off)
+{
+    ZbControl *c = g_new0 (ZbControl, 1);
+
+    c->key       = key;
+    c->kind      = kind;
+    c->widget    = widget;
+    c->value_on  = value_on;
+    c->value_off = value_off;
+    g_ptr_array_add (ctx->controls, c);
+}
+
+/* (e) Map one leaf expose to a row at *@row of @grid, honouring the
+ * access bitmap: a settable expose (bit 2) gets its typed editable
+ * control, anything else a read-only value row.  An unknown type also
+ * falls back to a read-only raw-value row so a newer Z2M expose surfaces
+ * rather than vanishing.  The control is tracked under its resolved key
+ * for seeding. */
+static void
+zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row, JsonObject *exp)
+{
+    const gchar *type     = zb_peek_string (exp, "type");
+    const gchar *label    = zb_expose_label (exp);
+    const gchar *desc     = zb_peek_string (exp, "description");
+    gboolean     settable = (zb_expose_access (exp) & 2) != 0;
+    gchar       *key      = zb_expose_key (exp);
+    GtkWidget   *cell;
+    GtkWidget   *w        = NULL;
+    ZbCtlKind    kind     = ZB_CTL_READONLY;
+    gchar       *value_on = NULL, *value_off = NULL;
+
+    if (settable && g_strcmp0 (type, "binary") == 0)
+    {
+        cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+        w = gtk_switch_new ();
+        gtk_widget_set_halign (w, GTK_ALIGN_START);
+        gtk_box_pack_start (GTK_BOX (cell), w, FALSE, FALSE, 0);
+        kind      = ZB_CTL_BINARY;
+        value_on  = g_strdup (zb_peek_string (exp, "value_on"));
+        value_off = g_strdup (zb_peek_string (exp, "value_off"));
+    }
+    else if (settable && g_strcmp0 (type, "numeric") == 0)
+    {
+        gdouble      min, max, step;
+        const gchar *unit = zb_peek_string (exp, "unit");
+        gint         digits = 0;
+        gdouble      s;
+
+        zb_numeric_range (exp, &min, &max, &step);
+        cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+        w = pn_device_spin_new_with_range (min, max, step);
+        for (s = step; s < 1.0 && digits < 6; s *= 10.0)
+            digits++;
+        gtk_spin_button_set_digits (GTK_SPIN_BUTTON (w), digits);
+        gtk_box_pack_start (GTK_BOX (cell), w, FALSE, FALSE, 0);
+        if (unit != NULL && *unit != '\0')
+        {
+            gchar           *u  = g_strconcat (" ", unit, NULL);
+            GtkWidget       *sl = gtk_label_new (u);
+            GtkStyleContext *sc = gtk_widget_get_style_context (sl);
+            gtk_style_context_add_class (sc, "dim-label");
+            gtk_box_pack_start (GTK_BOX (cell), sl, FALSE, FALSE, 0);
+            g_free (u);
+        }
+        kind = ZB_CTL_NUMERIC;
+    }
+    else if (settable && g_strcmp0 (type, "enum") == 0)
+    {
+        JsonArray *values = zb_object_array (exp, "values");
+
+        cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+        w = pn_device_combo_new ();
+        if (values != NULL)
+        {
+            guint n = json_array_get_length (values), i;
+            for (i = 0; i < n; i++)
+            {
+                gchar *v = zb_json_to_display (json_array_get_element (values, i));
+                gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (w), v, v);
+                g_free (v);
+            }
+        }
+        gtk_box_pack_start (GTK_BOX (cell), w, TRUE, TRUE, 0);
+        kind = ZB_CTL_ENUM;
+    }
+    else if (settable && g_strcmp0 (type, "text") == 0)
+    {
+        w = GTK_WIDGET (pn_device_form_attach_entry_row (grid, (*row)++, label));
+        kind = ZB_CTL_TEXT;
+    }
+    else
+    {
+        /* Read-only value row: a non-settable expose, or a settable one
+         * of a type we have no editor for (surfaced read-only rather than
+         * dropped). */
+        w = GTK_WIDGET (pn_device_form_attach_label_row (grid, (*row)++, label));
+        kind = ZB_CTL_READONLY;
+    }
+
+    if (desc != NULL && w != NULL)
+        gtk_widget_set_tooltip_text (w, desc);
+
+    if (key != NULL)
+        zb_track_control (ctx, key, kind, w, value_on, value_off);
+    else
+    {
+        g_free (key);
+        g_free (value_on);
+        g_free (value_off);
+    }
+}
+
+/* (d) Build one section of rows from a `features` array into @inner.
+ * Leaf features become rows in a single grid titled @title; a nested
+ * composite feature (one that itself has `features`) recurses into its
+ * own sub-section.  No section is added when the grid stays empty. */
+static void
+zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
+                         const gchar *title, JsonArray *features)
+{
+    GtkWidget *grid;
+    GPtrArray *nested;
+    guint      n, i;
+    gint       row = 0;
+
+    if (features == NULL)
+        return;
+
+    grid = gtk_grid_new ();
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    g_object_ref_sink (grid);
+
+    nested = g_ptr_array_new ();
+    n = json_array_get_length (features);
+    for (i = 0; i < n; i++)
+    {
+        JsonNode   *elem = json_array_get_element (features, i);
+        JsonObject *exp;
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        exp = json_node_get_object (elem);
+        if (zb_object_array (exp, "features") != NULL)
+            g_ptr_array_add (nested, exp);   /* composite -> sub-section */
+        else
+            zb_build_expose_row (ctx, GTK_GRID (grid), &row, exp);
+    }
+
+    if (row > 0)
+        pn_device_form_add_section (inner, title, grid);   /* takes the ref */
+    else
+        gtk_widget_destroy (grid);
+    g_object_unref (grid);
+
+    for (i = 0; i < nested->len; i++)
+    {
+        JsonObject *exp = g_ptr_array_index (nested, i);
+        zb_add_features_section (ctx, inner, zb_expose_label (exp),
+                                 zb_object_array (exp, "features"));
+    }
+    g_ptr_array_unref (nested);
+}
+
+/* (d) A top-level composite/typed expose (switch/light/cover/… or
+ * "composite") becomes its own notebook page built from its features. */
+static void
+zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
+{
+    GtkWidget   *inner;
+    GtkWidget   *tab   = pn_device_form_new_tab (&inner);
+    const gchar *title = zb_expose_label (exp);
+
+    zb_add_features_section (ctx, inner, title,
+                             zb_object_array (exp, "features"));
+    pn_device_dialog_append_page (ctx->shell, tab, title);
+    g_ptr_array_add (ctx->device_pages, tab);
+    gtk_widget_show_all (tab);
+}
+
+/* (d) Walk the whole exposes tree of the selected device into pages:
+ * each top-level composite/typed expose gets its own page; the bare
+ * top-level exposes (binary/numeric/enum/text/…) collect under a single
+ * "Settings" page.  Then jump to the first device page. */
+static void
+zb_build_device_pages (ZbDevCtx *ctx, JsonArray *exposes)
+{
+    GPtrArray *bare = g_ptr_array_new ();
+    guint      n, i;
+
+    if (exposes != NULL)
+    {
+        n = json_array_get_length (exposes);
+        for (i = 0; i < n; i++)
+        {
+            JsonNode   *elem = json_array_get_element (exposes, i);
+            JsonObject *exp;
+
+            if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+                continue;
+            exp = json_node_get_object (elem);
+            if (zb_object_array (exp, "features") != NULL)
+                zb_build_composite_page (ctx, exp);
+            else
+                g_ptr_array_add (bare, exp);
+        }
+    }
+
+    if (bare->len > 0)
+    {
+        GtkWidget *inner;
+        GtkWidget *tab  = pn_device_form_new_tab (&inner);
+        GtkWidget *grid = gtk_grid_new ();
+        gint       row  = 0;
+
+        gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+        gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+        for (i = 0; i < bare->len; i++)
+            zb_build_expose_row (ctx, GTK_GRID (grid), &row,
+                                 g_ptr_array_index (bare, i));
+
+        pn_device_form_add_section (inner, "Settings", grid);
+        pn_device_dialog_append_page (ctx->shell, tab, "Settings");
+        g_ptr_array_add (ctx->device_pages, tab);
+        gtk_widget_show_all (tab);
+    }
+    g_ptr_array_unref (bare);
+
+    /* The static "Broker" page is index 0; show the first device page. */
+    if (ctx->device_pages->len > 0)
+        pn_device_dialog_set_current_page (ctx->shell, 1);
+}
+
+/* (f) Seed every built control from the captured device-state object by
+ * its resolved key, leaving the build-time default (or the "—"
+ * placeholder on read-only rows) where the value is absent. */
+static void
+zb_seed_controls (ZbDevCtx *ctx)
+{
+    JsonNode   *snode;
+    JsonObject *state;
+    guint       i;
+
+    if (ctx->selected_name == NULL)
+        return;
+    snode = g_hash_table_lookup (ctx->state, ctx->selected_name);
+    if (snode == NULL || !JSON_NODE_HOLDS_OBJECT (snode))
+        return;
+    state = json_node_get_object (snode);
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl *c = g_ptr_array_index (ctx->controls, i);
+        JsonNode  *v;
+
+        if (!json_object_has_member (state, c->key))
+            continue;
+        v = json_object_get_member (state, c->key);
+        if (v == NULL)
+            continue;
+
+        switch (c->kind)
+        {
+        case ZB_CTL_BINARY:
+            gtk_switch_set_active (GTK_SWITCH (c->widget),
+                                   zb_binary_is_on (v, c->value_on));
+            break;
+        case ZB_CTL_NUMERIC:
+            {
+                gdouble d;
+                if (zb_node_get_double (v, &d))
+                    gtk_spin_button_set_value (GTK_SPIN_BUTTON (c->widget), d);
+            }
+            break;
+        case ZB_CTL_ENUM:
+            {
+                gchar *s = zb_json_to_display (v);
+                gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+                g_free (s);
+            }
+            break;
+        case ZB_CTL_TEXT:
+            {
+                gchar *s = zb_json_to_display (v);
+                gtk_entry_set_text (GTK_ENTRY (c->widget), s);
+                g_free (s);
+            }
+            break;
+        case ZB_CTL_READONLY:
+            {
+                gchar *s = zb_json_to_display (v);
+                pn_device_form_set_value (GTK_LABEL (c->widget), s);
+                g_free (s);
+            }
+            break;
+        }
+    }
+}
+
 /* A device row was clicked.  Tear down the previously-shown device pages,
  * resolve the clicked row back to its inventory record and stash its
  * friendly name + exposes/options for the page builder.  @row is borrowed;
@@ -507,8 +1034,11 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
     exposes = zb_definition_array (dev, "exposes");
     options = zb_definition_array (dev, "options");
 
-    /* (d, later) walk exposes/options into editable settings pages and
-     * (f) seed them from ctx->state here. */
+    /* (d, e) walk the exposes tree into editable settings pages, then
+     * (f) seed every built control from the captured live state.  Options
+     * still get only the status note below (their own page is item i). */
+    zb_build_device_pages (ctx, exposes);
+    zb_seed_controls (ctx);
 
     n_exposes = (exposes != NULL) ? json_array_get_length (exposes) : 0;
     pn_device_dialog_set_statusf (
@@ -568,6 +1098,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
     ctx->state = g_hash_table_new_full (g_str_hash, g_str_equal,
                                         g_free, (GDestroyNotify) json_node_unref);
     ctx->device_pages = g_ptr_array_new ();
+    ctx->controls     = g_ptr_array_new_with_free_func (zb_control_free);
 
     ctx->shell = pn_device_dialog_new (parent, "Zigbee Devices",
                                        PN_DEVICE_DIALOG_WITH_DEVICE_LIST);
@@ -649,6 +1180,7 @@ zb_dev_ctx_free (gpointer data)
 
     /* Shell already cleared, so the pages are torn down by the dialog
      * itself -- just free our tracking containers and the state map. */
+    g_clear_pointer (&ctx->controls, g_ptr_array_unref);
     g_clear_pointer (&ctx->device_pages, g_ptr_array_unref);
     g_clear_pointer (&ctx->state, g_hash_table_unref);
     g_clear_pointer (&ctx->selected_name, g_free);

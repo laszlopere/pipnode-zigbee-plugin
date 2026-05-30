@@ -219,33 +219,37 @@ publish path; no second mosquitto client to hand-roll.
       (zb_start_source) and -- container-only, the dialog tears the widgets
       down -- on close (zb_dev_ctx_free). Per-control binding teardown is
       noted for item e.
-   d. Walk the exposes tree into pages/sections.
-      * A top-level composite expose (type switch/light/cover/lock/
-        climate/fan, or "composite"/"list") becomes its own page or
-        section; recurse into its `features` array for the rows.
-      * Bare top-level exposes (binary/numeric/enum/text) group under
-        a generic "State" / "Settings" page.
-      * Use pn_device_form_new_tab + _add_section + a GtkGrid of rows,
-        the same house-style helpers the Broker page already uses.
-   e. Map each expose to a widget by `type`, honouring the `access`
-      bitmap (1=published, 2=settable, 4=gettable): bit 2 set -> an
-      editable control, otherwise a read-only value row via
-      pn_device_form_attach_label_row.
-      * binary  -> GtkSwitch, mapping value_on/value_off (string
-        "ON"/"OFF" or JSON bool) to active state.
-      * numeric -> PnDeviceSpin (pn_device_spin_new_with_range) seeded
-        with value_min/value_max/value_step; `unit` as a suffix label.
-      * enum    -> PnDeviceCombo filled from the `values` string array.
-      * text    -> GtkEntry / PnInlineEditLabel (pn_inline_edit_label_new).
-      * composite/list -> nested sub-section built by the same walk.
-      * unknown `type` -> read-only row showing the raw JSON, so a
-        newer Z2M expose surfaces rather than vanishing.
-      Resolve each control's JSON key from `property` (and `endpoint`:
-      the key becomes <property>_<endpoint> when present); label from
-      `label`/`name`, tooltip from `description`.
-   f. Seed current values. After building, fill every control from the
-      captured device-state object by its resolved property key; leave
-      the "—" placeholder when the value is absent.
+   d. Walk the exposes tree into pages/sections. DONE (2026-05-30).
+      zb_build_device_pages walks ctx's selected exposes: every top-level
+      expose carrying a `features` array (the typed switch/light/cover/…
+      and "composite") becomes its own page via zb_build_composite_page;
+      the bare top-level exposes collect under one "Settings" page. Rows
+      are built with pn_device_form_new_tab + _add_section + a GtkGrid,
+      the same house-style helpers the Broker page uses, and the new pages
+      are tracked in ctx->device_pages (so item c tears them down). A
+      `list` expose has no `features`, so it falls through to the leaf
+      path and surfaces as a read-only raw-JSON row rather than being
+      mis-rendered; nested composite *features* recurse into sub-sections
+      (zb_add_features_section). Per-endpoint grouping stays item j.
+   e. Map each expose to a widget by `type`, honouring `access`. DONE
+      (2026-05-30). zb_build_expose_row keys off access bit 2: a settable
+      binary -> GtkSwitch (value_on/value_off captured for the bool/string
+      mapping), numeric -> PnDeviceSpin seeded with value_min/max/step and
+      digits derived from the step, with `unit` as a dim suffix label;
+      enum -> PnDeviceCombo filled from `values`; text -> GtkEntry. A
+      non-settable expose -- and a settable one of an unknown type -- gets
+      a read-only value row (pn_device_form_attach_label_row), so a newer
+      Z2M type surfaces rather than vanishing. The JSON key resolves from
+      `property` (else `name`); an `endpoint` is appended only when not
+      already baked in, so a two-gang "state_left" is not doubled. label
+      from label/name/property/type, tooltip from `description`. Each
+      control is tracked as a ZbControl (key + kind + widget) for f/g/h.
+   f. Seed current values. DONE (2026-05-30). zb_seed_controls fills every
+      tracked control from the captured zigbee2mqtt/<name> state object by
+      its resolved key (switch active, spin value, combo active-id, entry
+      text, read-only label), leaving the build default / "—" placeholder
+      when the key is absent. Called right after the page build on select;
+      the live-repaint-on-new-state half is item h.
    g. Apply / write-back. Give each settable page (or each control) an
       Apply that collects the changed settable properties into a
       JsonObject, builds a PnMessage with topic
