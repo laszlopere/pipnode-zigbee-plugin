@@ -34,6 +34,8 @@
 #include "config.h"
 #endif
 
+#include <string.h>
+
 #include <gmodule.h>
 #include <gtk/gtk.h>
 
@@ -58,6 +60,10 @@
 
 /* The hidden source always watches the whole Zigbee2MQTT tree. */
 #define ZB_DEV_SUBSCRIBE_TOPIC "zigbee2mqtt/#"
+
+/* Common prefix of every Zigbee2MQTT topic.  A bare device-state topic is
+ * ZB_DEV_TOPIC_PREFIX "<friendly_name>" with nothing further after it. */
+#define ZB_DEV_TOPIC_PREFIX "zigbee2mqtt/"
 
 /* Z2M publishes its full device inventory here, retained, as a JSON
  * array of device records -- delivered right after subscribe and again
@@ -87,6 +93,23 @@ typedef struct
      * message handler is borrowed and freed when the handler returns, so
      * we keep a copy.  NULL until the first inventory arrives. */
     JsonNode        *devices;
+
+    /* Live per-device state: friendly_name (owned gchar*) -> a deep copy
+     * of the latest retained zigbee2mqtt/<friendly_name> payload (owned
+     * JsonNode object, freed with json_node_unref).  Refreshed on every
+     * bare device-state publish; the seed source for the settings
+     * controls. */
+    GHashTable      *state;
+
+    /* friendly_name of the device whose settings pages are currently
+     * shown on the right (owned), or NULL when none is selected. */
+    gchar           *selected_name;
+
+    /* The dynamically-built device pages currently in the notebook
+     * (borrowed GtkWidget*; the notebook owns them).  Tracked so a
+     * re-select or dialog close can drop exactly those, keeping the
+     * static "Broker" page.  Never NULL once the dialog is built. */
+    GPtrArray       *device_pages;
 } ZbDevCtx;
 
 /* ------------------------------------------------------------------ */
@@ -109,6 +132,37 @@ zb_drop_source (ZbDevCtx *ctx)
     /* unref -> dispose joins the mosquitto network thread and sends a
      * clean DISCONNECT, so no callback can fire after this returns. */
     g_clear_object (&ctx->source);
+}
+
+/* Drop the dynamically-built device pages from the notebook, keeping the
+ * static "Broker" page, and forget them.  Safe to call when none are
+ * built.  Only touches the notebook while the shell is alive: in the
+ * dialog-teardown path (ctx->shell cleared first) the notebook is already
+ * being destroyed, so we just forget our borrowed pointers. */
+static void
+zb_clear_device_pages (ZbDevCtx *ctx)
+{
+    if (ctx->device_pages == NULL)
+        return;
+
+    if (ctx->shell != NULL)
+    {
+        GtkNotebook *nb = pn_device_dialog_get_notebook (ctx->shell);
+        guint        i;
+
+        for (i = 0; i < ctx->device_pages->len; i++)
+        {
+            GtkWidget *page = g_ptr_array_index (ctx->device_pages, i);
+            gint       pos  = gtk_notebook_page_num (nb, page);
+
+            if (pos >= 0)
+                gtk_notebook_remove_page (nb, pos);
+        }
+    }
+
+    /* Removing a page destroys it and, with it, the per-control bindings
+     * held on the page widgets (item e wires those up). */
+    g_ptr_array_set_size (ctx->device_pages, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,6 +229,89 @@ zb_device_secondary (JsonObject *dev)
 
     type = zb_peek_string (dev, "type");
     return g_strdup (type != NULL ? type : "Unknown device");
+}
+
+/* Borrow the device record whose IEEE address (or, lacking one, friendly
+ * name) equals @id -- the stable key the list rows were built with -- from
+ * the stored inventory.  NULL when absent.  Valid only while ctx->devices
+ * is unchanged. */
+static JsonObject *
+zb_find_device (ZbDevCtx *ctx, const gchar *id)
+{
+    JsonArray *arr;
+    guint      n, i;
+
+    if (ctx->devices == NULL || id == NULL ||
+        !JSON_NODE_HOLDS_ARRAY (ctx->devices))
+        return NULL;
+
+    arr = json_node_get_array (ctx->devices);
+    n   = json_array_get_length (arr);
+    for (i = 0; i < n; i++)
+    {
+        JsonNode    *elem = json_array_get_element (arr, i);
+        JsonObject  *dev;
+        const gchar *ieee, *fname;
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        dev   = json_node_get_object (elem);
+        ieee  = zb_peek_string (dev, "ieee_address");
+        fname = zb_peek_string (dev, "friendly_name");
+
+        if (g_strcmp0 (ieee, id) == 0 ||
+            (ieee == NULL && g_strcmp0 (fname, id) == 0))
+            return dev;
+    }
+    return NULL;
+}
+
+/* Borrow the @key array ("exposes" / "options") off @dev's definition, or
+ * NULL when the device has no definition or no such array (e.g. the
+ * Coordinator).  Valid only while @dev lives. */
+static JsonArray *
+zb_definition_array (JsonObject *dev, const gchar *key)
+{
+    JsonNode   *dn, *kn;
+    JsonObject *def;
+
+    if (!json_object_has_member (dev, "definition"))
+        return NULL;
+    dn = json_object_get_member (dev, "definition");
+    if (dn == NULL || !JSON_NODE_HOLDS_OBJECT (dn))
+        return NULL;
+    def = json_node_get_object (dn);
+    if (!json_object_has_member (def, key))
+        return NULL;
+    kn = json_object_get_member (def, key);
+    if (kn == NULL || !JSON_NODE_HOLDS_ARRAY (kn))
+        return NULL;
+    return json_node_get_array (kn);
+}
+
+/* Capture a bare device-state publish (topic zigbee2mqtt/<friendly_name>,
+ * no further '/').  Stores a deep copy of the payload object in the
+ * friendly_name -> state map, replacing any prior value -- the
+ * current-value source the settings controls seed from.  Topics with a
+ * deeper path (bridge/*, <name>/set, <name>/availability, …) are not
+ * device state and are ignored. */
+static void
+zb_capture_state (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
+{
+    const gchar *name = topic + strlen (ZB_DEV_TOPIC_PREFIX);
+    JsonNode    *payload;
+
+    if (*name == '\0' || strchr (name, '/') != NULL)
+        return;
+
+    payload = pn_message_get_member (message, "payload");
+    if (payload == NULL || !JSON_NODE_HOLDS_OBJECT (payload))
+        return;
+
+    g_hash_table_insert (ctx->state, g_strdup (name), json_node_copy (payload));
+
+    /* When this is the device on screen, items f/h repaint its live
+     * controls from the refreshed state here. */
 }
 
 /* Parse a bridge/devices publish: store a private copy of the inventory
@@ -254,6 +391,8 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
     topic = pn_message_get_topic (message);
     if (g_strcmp0 (topic, ZB_DEV_DEVICES_TOPIC) == 0)
         zb_ingest_devices (ctx, message);
+    else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_TOPIC_PREFIX))
+        zb_capture_state (ctx, topic, message);
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,6 +415,13 @@ zb_start_source (ZbDevCtx *ctx)
     pn_device_form_set_value (ctx->count_label, "0");
     g_clear_pointer (&ctx->devices, json_node_unref);
     pn_device_dialog_set_device_rows (ctx->shell, NULL);   /* clear list */
+
+    /* The inventory and live state replay on reconnect; drop the stale
+     * selection, its pages and the per-device state so nothing carries
+     * over from the previous broker/session. */
+    g_clear_pointer (&ctx->selected_name, g_free);
+    g_hash_table_remove_all (ctx->state);
+    zb_clear_device_pages (ctx);
 
     /* The active id is the profile id; "" follows the primary broker.
      * active-id is a GtkComboBox property (not GtkComboBoxText). */
@@ -324,18 +470,52 @@ zb_on_scan (gpointer user_data)
                 ctx->shell, "Pick a broker and press Apply to discover devices.");
 }
 
-/* A device row was clicked: echo which device to the status bar.  @row is
- * borrowed; its fields come straight from the list we built. */
+/* A device row was clicked.  Tear down the previously-shown device pages,
+ * resolve the clicked row back to its inventory record and stash its
+ * friendly name + exposes/options for the page builder.  @row is borrowed;
+ * its fields come straight from the list we built. */
 static void
 zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
 {
-    ZbDevCtx *ctx = user_data;
+    ZbDevCtx    *ctx = user_data;
+    JsonObject  *dev;
+    JsonArray   *exposes, *options;
+    const gchar *fname;
+    guint        n_exposes;
 
     if (row == NULL)
         return;
-    pn_device_dialog_set_statusf (ctx->shell, "%s  (%s)",
-                                  row->primary != NULL ? row->primary : "device",
-                                  row->id != NULL ? row->id : "?");
+
+    /* (c) Drop the old device's pages before building the new one's. */
+    zb_clear_device_pages (ctx);
+    g_clear_pointer (&ctx->selected_name, g_free);
+
+    /* (b) Resolve the row id (IEEE) back to its device record. */
+    dev = zb_find_device (ctx, row->id);
+    if (dev == NULL)
+    {
+        pn_device_dialog_set_statusf (
+                ctx->shell, "%s  (%s) — no matching device record.",
+                row->primary != NULL ? row->primary : "device",
+                row->id != NULL ? row->id : "?");
+        return;
+    }
+
+    fname = zb_peek_string (dev, "friendly_name");
+    ctx->selected_name = g_strdup (fname != NULL ? fname : row->primary);
+
+    exposes = zb_definition_array (dev, "exposes");
+    options = zb_definition_array (dev, "options");
+
+    /* (d, later) walk exposes/options into editable settings pages and
+     * (f) seed them from ctx->state here. */
+
+    n_exposes = (exposes != NULL) ? json_array_get_length (exposes) : 0;
+    pn_device_dialog_set_statusf (
+            ctx->shell, "%s — %u expose%s%s.",
+            ctx->selected_name != NULL ? ctx->selected_name : "device",
+            n_exposes, n_exposes == 1 ? "" : "s",
+            options != NULL ? ", options available" : "");
 }
 
 /* ------------------------------------------------------------------ */
@@ -384,6 +564,10 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
     GtkWidget *apply;
     GtkWidget *cell;
     gint       row = 0;
+
+    ctx->state = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                        g_free, (GDestroyNotify) json_node_unref);
+    ctx->device_pages = g_ptr_array_new ();
 
     ctx->shell = pn_device_dialog_new (parent, "Zigbee Devices",
                                        PN_DEVICE_DIALOG_WITH_DEVICE_LIST);
@@ -462,6 +646,12 @@ zb_dev_ctx_free (gpointer data)
     ctx->shell = NULL;
     zb_drop_source (ctx);
     g_clear_pointer (&ctx->devices, json_node_unref);
+
+    /* Shell already cleared, so the pages are torn down by the dialog
+     * itself -- just free our tracking containers and the state map. */
+    g_clear_pointer (&ctx->device_pages, g_ptr_array_unref);
+    g_clear_pointer (&ctx->state, g_hash_table_unref);
+    g_clear_pointer (&ctx->selected_name, g_free);
     g_free (ctx);
 }
 

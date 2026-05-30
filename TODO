@@ -201,23 +201,24 @@ handing it to the sink (pn_node_receive_message) is the supported
 publish path; no second mosquitto client to hand-roll.
 
 9. Build editable per-device settings pages from the exposes tree.
-   a. Capture live state. In zb_on_message, when the topic is the
-      bare device topic zigbee2mqtt/<friendly_name> (no further '/'),
-      store a deep copy of the payload object in a
-      friendly_name -> JsonObject map on the ctx. This is the
-      current-value source the controls seed from; refresh it on every
-      such publish and, when it is the shown device, push the new
-      values into the live controls.
-   b. Resolve the selected device. On row select, look the row id
-      (IEEE) up in ctx->devices to find its object, then its
-      definition.exposes and definition.options arrays. Stash the
-      selected friendly_name on the ctx (needed for the set topic and
-      the state-map lookup).
-   c. Clear old pages. Remove any previously-built device pages from
-      the notebook (keep the static "Broker" page), tearing down their
-      per-control bindings, before building the new device's pages.
-      Track the dynamic pages/widgets on the ctx so teardown on
-      re-select and on dialog close is clean.
+   a. Capture live state. DONE (2026-05-30). zb_capture_state stores a
+      json_node_copy of every bare zigbee2mqtt/<friendly_name> payload
+      (prefix-matched, no further '/') in a friendly_name -> JsonNode
+      object map (ctx->state). The "push into the live controls when it
+      is the shown device" half waits on the controls themselves (items
+      f/h) -- a seam comment marks the spot.
+   b. Resolve the selected device. DONE (2026-05-30). zb_on_device_
+      selected resolves the row id (IEEE, friendly-name fallback) back to
+      its record via zb_find_device, reads definition.exposes/options via
+      zb_definition_array, and stashes ctx->selected_name. For now it
+      reports the expose count + options presence to the status bar; item
+      d turns those exposes into pages.
+   c. Clear old pages. DONE (2026-05-30). zb_clear_device_pages drops the
+      tracked dynamic pages (ctx->device_pages) from the notebook, keeping
+      the static "Broker" page, and is called on re-select, on Apply/Reload
+      (zb_start_source) and -- container-only, the dialog tears the widgets
+      down -- on close (zb_dev_ctx_free). Per-control binding teardown is
+      noted for item e.
    d. Walk the exposes tree into pages/sections.
       * A top-level composite expose (type switch/light/cover/lock/
         climate/fan, or "composite"/"list") becomes its own page or
