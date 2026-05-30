@@ -266,11 +266,19 @@ publish path; no second mosquitto client to hand-roll.
       Apply, so a second press resends nothing; "no changes" is reported,
       not published. (The applied value is the baseline until item h
       repaints from the device's confirmed re-publish.)
-   h. Reflect confirmed state. Z2M re-publishes the device's full state
-      on zigbee2mqtt/<friendly_name> after a successful set, which the
-      live-state capture already receives -- repaint the shown controls
-      from it so the UI shows what the device accepted (a value the
-      device clamped/rejected shows through), not what was typed.
+   h. Reflect confirmed state. DONE (2026-05-30). zb_capture_state, after
+      storing a bare zigbee2mqtt/<name> publish, calls zb_seed_controls
+      when <name> is the shown device -- the same painter item f uses, now
+      shared. It repaints each control whose key is in the fresh state and
+      re-anchors that control's baseline to the painted value, so a value
+      the device clamped/rejected after an Apply shows through (and the
+      next Apply diffs against the device's truth, not what was typed).
+      Z2M's bare-topic re-publish carries the full state, so a periodic
+      report repaints everything, including an in-progress un-applied edit
+      -- accepted by design here (the device's confirmed value wins); keys
+      absent from the payload, and any pending edit on them, are untouched.
+      Runs on the main thread (PnMqtt marshals PUBLISHes there), so the
+      GTK writes are safe.
    i. Lifecycle / edge cases. A device with no definition (the
       Coordinator) or empty exposes gets an identity-only read-only
       page; switching devices or pressing Reload rebuilds cleanly;

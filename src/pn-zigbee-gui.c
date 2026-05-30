@@ -175,6 +175,11 @@ zb_control_free (gpointer data)
     g_free (c);
 }
 
+/* Defined in the settings-pages section below; the message handler
+ * (zb_capture_state) calls it to repaint the shown controls from a
+ * confirmed re-publish (item h). */
+static void zb_seed_controls (ZbDevCtx *ctx);
+
 /* ------------------------------------------------------------------ */
 /*  Hidden source lifecycle                                            */
 /* ------------------------------------------------------------------ */
@@ -379,9 +384,13 @@ zb_capture_state (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
 
     g_hash_table_insert (ctx->state, g_strdup (name), json_node_copy (payload));
 
-    /* When this is the device on screen, item h repaints its live
-     * controls from the refreshed state here (the initial seed at select
-     * time is item f, in zb_seed_controls). */
+    /* (h) When this is the device on screen, repaint its controls from the
+     * just-captured state so the UI reflects what the device confirmed
+     * (e.g. a value it clamped after an Apply) rather than what was typed.
+     * zb_seed_controls reads the same ctx->state entry and re-anchors each
+     * painted control's baseline. */
+    if (ctx->selected_name != NULL && g_strcmp0 (name, ctx->selected_name) == 0)
+        zb_seed_controls (ctx);
 }
 
 /* Parse a bridge/devices publish: store a private copy of the inventory
@@ -1171,9 +1180,15 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonArray *exposes)
         pn_device_dialog_set_current_page (ctx->shell, 1);
 }
 
-/* (f) Seed every built control from the captured device-state object by
- * its resolved key, leaving the build-time default (or the "—"
- * placeholder on read-only rows) where the value is absent. */
+/* (f, h) Paint every built control from the captured device-state object
+ * by its resolved key, leaving the build-time default (or the "—"
+ * placeholder on read-only rows) where the value is absent.  Each editable
+ * control it paints also adopts the painted value as its baseline, so
+ * change-detection stays anchored to the device's truth.  Used both for
+ * the initial seed on select (item f) and to repaint from a confirmed
+ * re-publish (item h, via zb_capture_state) -- a value the device clamped
+ * or rejected then shows through, replacing what was typed.  Controls
+ * absent from @state (and any pending edit on them) are left untouched. */
 static void
 zb_seed_controls (ZbDevCtx *ctx)
 {
@@ -1233,6 +1248,15 @@ zb_seed_controls (ZbDevCtx *ctx)
                 g_free (s);
             }
             break;
+        }
+
+        /* The painted value is now the device's confirmed truth: anchor
+         * the baseline to it so a later Apply diffs against what the device
+         * actually holds, not the pre-paint value. */
+        if (c->kind != ZB_CTL_READONLY)
+        {
+            g_free (c->baseline);
+            c->baseline = zb_control_read_string (c);
         }
     }
 }
