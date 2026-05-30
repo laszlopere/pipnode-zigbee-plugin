@@ -93,6 +93,13 @@
  * Z2M acknowledges on the matching bridge/response/device/<cmd> topic, which we
  * surface in the status bar (a successful change also re-publishes
  * bridge/devices, so the list refreshes itself). */
+/* Pairing window: publish {"value":true,"time":<seconds>} to open the
+ * coordinator's join window, {"value":false} to close it early. */
+#define ZB_DEV_PERMIT_TOPIC   "zigbee2mqtt/bridge/request/permit_join"
+
+/* Length of the pairing window we open, in seconds (the requested 5 min). */
+#define ZB_JOIN_WINDOW_SECONDS 300
+
 #define ZB_DEV_RENAME_TOPIC   "zigbee2mqtt/bridge/request/device/rename"
 #define ZB_DEV_OPTIONS_TOPIC  "zigbee2mqtt/bridge/request/device/options"
 #define ZB_DEV_REMOVE_TOPIC   "zigbee2mqtt/bridge/request/device/remove"
@@ -193,6 +200,25 @@ typedef struct
      * is cleared together with device_pages.  The seed/write-back passes
      * iterate it.  Never NULL once the dialog is built. */
     GPtrArray       *controls;
+
+    /* Pairing ("join window") UI.  join_start is the Broker page's "open join
+     * window" button (borrowed; the page owns it), insensitive until a broker
+     * is applied; join_spinner is the marker beside it, spun while a window is
+     * open.  The rest belong to the modal countdown dialog that runs while the
+     * window is open: the dialog and the two widgets it updates each tick, the
+     * per-second timeout source (0 when none), the window length and seconds
+     * left, the inventory size captured when it opened and the count of devices
+     * that have joined since.  join_dialog is NULL when no window is open. */
+    GtkWidget       *join_start;
+    GtkWidget       *join_spinner;
+    GtkWidget       *join_dialog;
+    GtkWidget       *join_progress;
+    GtkWidget       *join_label;
+    guint            join_tick_id;
+    guint            join_total;
+    guint            join_left;
+    guint            join_base_count;
+    guint            join_joined;
 } ZbDevCtx;
 
 static void
@@ -211,6 +237,11 @@ zb_control_free (gpointer data)
  * (zb_capture_state) calls it to repaint the shown controls from a
  * confirmed re-publish (item h). */
 static void zb_seed_controls (ZbDevCtx *ctx);
+
+/* Defined in the pairing section below; the inventory handler
+ * (zb_ingest_devices) calls it to refresh the open join dialog's joined
+ * count from the freshly-arrived device list. */
+static void zb_join_on_inventory (ZbDevCtx *ctx);
 
 /* ------------------------------------------------------------------ */
 /*  Hidden source lifecycle                                            */
@@ -236,6 +267,12 @@ zb_drop_source (ZbDevCtx *ctx)
     /* The write-back sink rides the same lifecycle as the source -- its
      * dispose likewise joins its own network thread and disconnects. */
     g_clear_object (&ctx->sink);
+
+    /* Pairing needs a connected sink; with none, the join button is dead.
+     * (Guarded on shell: the ctx-free path clears it before dropping us,
+     * by when the button widget may already be gone.) */
+    if (ctx->shell != NULL && ctx->join_start != NULL)
+        gtk_widget_set_sensitive (ctx->join_start, FALSE);
 }
 
 /* Drop the dynamically-built device pages from the notebook, keeping the
@@ -481,6 +518,10 @@ zb_ingest_devices (ZbDevCtx *ctx, PnMessage *message)
     pn_device_dialog_set_statusf (ctx->shell,
                                   "%u device%s reported by Zigbee2MQTT.",
                                   kept, kept == 1 ? "" : "s");
+
+    /* A device joining mid-window republishes the inventory; refresh the
+     * open join dialog's joined count off this fresh list. */
+    zb_join_on_inventory (ctx);
 }
 
 /* Surface a bridge/response/device/<cmd> acknowledgement in the status bar.
@@ -590,6 +631,10 @@ zb_start_source (ZbDevCtx *ctx)
                   "broker-profile", id,
                   "retain",         FALSE,
                   NULL);
+
+    /* A sink is now connected: the pairing section can open a join window. */
+    if (ctx->join_start != NULL)
+        gtk_widget_set_sensitive (ctx->join_start, TRUE);
 
     pn_device_dialog_set_statusf (ctx->shell,
                                   "Connecting via %s and watching %s…",
@@ -2103,6 +2148,274 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Pairing (join window)                                              */
+/* ------------------------------------------------------------------ */
+
+/* The number of devices in the current inventory (valid records only), or 0
+ * when none is held -- the baseline the join dialog counts arrivals against. */
+static guint
+zb_device_count (ZbDevCtx *ctx)
+{
+    JsonArray *arr;
+    guint      n, i, count = 0;
+
+    if (ctx->devices == NULL || !JSON_NODE_HOLDS_ARRAY (ctx->devices))
+        return 0;
+    arr = json_node_get_array (ctx->devices);
+    n   = json_array_get_length (arr);
+    for (i = 0; i < n; i++)
+    {
+        JsonNode *e = json_array_get_element (arr, i);
+        if (e != NULL && JSON_NODE_HOLDS_OBJECT (e))
+            count++;
+    }
+    return count;
+}
+
+/* Publish a permit_join request: open the coordinator's join window for
+ * @seconds when @open, or close it immediately otherwise.  A no-op without a
+ * connected sink (the caller has already reported that). */
+static void
+zb_join_publish (ZbDevCtx *ctx, gboolean open, guint seconds)
+{
+    JsonObject *obj;
+
+    if (ctx->sink == NULL)
+        return;
+    obj = json_object_new ();
+    json_object_set_boolean_member (obj, "value", open);
+    if (open)
+        json_object_set_int_member (obj, "time", (gint64) seconds);
+    zb_publish_to (ctx, ZB_DEV_PERMIT_TOPIC, obj);      /* consumes obj */
+}
+
+/* Repaint the open join dialog's progress bar and countdown / joined-count
+ * label from the current ctx->join_* state.  A no-op when none is open. */
+static void
+zb_join_update (ZbDevCtx *ctx)
+{
+    gchar  *text;
+    gdouble frac;
+
+    if (ctx->join_dialog == NULL)
+        return;
+    frac = (ctx->join_total > 0)
+               ? (gdouble) ctx->join_left / (gdouble) ctx->join_total
+               : 0.0;
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (ctx->join_progress), frac);
+
+    text = g_strdup_printf ("%u:%02u remaining \xe2\x80\x94 %u device%s joined.",
+                            ctx->join_left / 60, ctx->join_left % 60,
+                            ctx->join_joined,
+                            ctx->join_joined == 1 ? "" : "s");
+    gtk_label_set_text (GTK_LABEL (ctx->join_label), text);
+    g_free (text);
+}
+
+/* A fresh inventory arrived: while a window is open, recompute how many
+ * devices joined since it opened and repaint the dialog. */
+static void
+zb_join_on_inventory (ZbDevCtx *ctx)
+{
+    guint now;
+
+    if (ctx->join_dialog == NULL)
+        return;
+    now = zb_device_count (ctx);
+    ctx->join_joined = (now > ctx->join_base_count)
+                           ? now - ctx->join_base_count : 0;
+    zb_join_update (ctx);
+}
+
+/* Tear down the open join window.  Idempotent and the single teardown path:
+ * the dialog's "response" and "destroy" handlers both route here and either
+ * may fire first.  @user_ended is TRUE when the user cancelled / closed the
+ * dialog (so we close the coordinator's window now) and FALSE on a natural
+ * timer expiry (Z2M closes it itself) or app teardown.
+ *
+ * Crucially this does NOT run a nested main loop -- it just stops the timer,
+ * stops the marker spinner and destroys the dialog, all on the main thread,
+ * so the MQTT network thread's cross-thread g_idle_add can never contend with
+ * a re-entrant teardown (the gtk_dialog_run deadlock this replaces). */
+static void
+zb_join_finish (ZbDevCtx *ctx, gboolean user_ended)
+{
+    GtkWidget *dialog = ctx->join_dialog;
+
+    if (dialog == NULL)
+        return;
+
+    /* Forget the dialog first, so the destroy handler the gtk_widget_destroy
+     * below triggers sees no open window and returns immediately -- this is
+     * the one place that tears down. */
+    ctx->join_dialog = NULL;
+
+    if (ctx->join_tick_id != 0)
+    {
+        g_source_remove (ctx->join_tick_id);
+        ctx->join_tick_id = 0;
+    }
+
+    if (user_ended)
+        zb_join_publish (ctx, FALSE, 0);
+
+    if (ctx->join_spinner != NULL)
+    {
+        gtk_spinner_stop (GTK_SPINNER (ctx->join_spinner));
+        gtk_widget_hide (ctx->join_spinner);
+    }
+    /* Skip the status update when the parent is itself being torn down (the
+     * DESTROY_WITH_PARENT path): its status bar may already be gone. */
+    if (ctx->shell != NULL)
+    {
+        GtkWidget *md = pn_device_dialog_get_dialog (ctx->shell);
+        if (md != NULL && !gtk_widget_in_destruction (md))
+            pn_device_dialog_set_statusf (
+                    ctx->shell,
+                    "Join window closed \xe2\x80\x94 %u device%s joined.",
+                    ctx->join_joined, ctx->join_joined == 1 ? "" : "s");
+    }
+
+    ctx->join_progress = NULL;
+    ctx->join_label    = NULL;
+    gtk_widget_destroy (dialog);
+}
+
+/* Cancel button, Escape, or window-manager close: the user ended it.  The
+ * timer's natural-expiry path responds with GTK_RESPONSE_NONE instead. */
+static void
+zb_join_on_response (GtkDialog *dialog, gint response, gpointer user_data)
+{
+    (void) dialog;
+    zb_join_finish (user_data, response != GTK_RESPONSE_NONE);
+}
+
+/* Safety net for a destroy that did not come through "response" (e.g. the
+ * parent torn down with DESTROY_WITH_PARENT): not a user cancel, so do not
+ * publish a close. */
+static void
+zb_join_on_destroy (GtkWidget *dialog, gpointer user_data)
+{
+    (void) dialog;
+    zb_join_finish (user_data, FALSE);
+}
+
+/* Per-second timer driving the countdown.  On expiry it asks the dialog to
+ * respond with NONE (the natural-expiry marker), which routes into
+ * zb_join_finish via the response handler. */
+static gboolean
+zb_join_tick (gpointer user_data)
+{
+    ZbDevCtx *ctx = user_data;
+
+    if (ctx->join_left > 0)
+        ctx->join_left--;
+    zb_join_update (ctx);
+
+    if (ctx->join_left == 0)
+    {
+        ctx->join_tick_id = 0;          /* clear before finish double-removes */
+        if (ctx->join_dialog != NULL)
+            gtk_dialog_response (GTK_DIALOG (ctx->join_dialog),
+                                 GTK_RESPONSE_NONE);
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+/* Open a 5-minute join window on the coordinator and show a *non-modal-loop*
+ * countdown dialog (spinner + progress bar + remaining time + devices-joined
+ * count + Cancel) while it is open.  Unlike gtk_dialog_run, this returns
+ * immediately: the dialog drives itself through its "response"/"destroy"
+ * handlers and the per-second timer, so the editor's main loop keeps pumping
+ * MQTT traffic underneath it.  The window's modality (input grab) comes from
+ * GTK_DIALOG_MODAL + transient-for-parent, not from desensitising the parent
+ * (a missed re-enable would look like a freeze). */
+static void
+zb_on_join_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx  *ctx = user_data;
+    GtkWidget *main_dialog, *dialog, *content, *box;
+    GtkWidget *intro, *spin_row, *spinner, *progress, *label;
+
+    (void) button;
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before pairing.");
+        return;
+    }
+    if (ctx->join_dialog != NULL)       /* already open */
+        return;
+
+    main_dialog = pn_device_dialog_get_dialog (ctx->shell);
+    dialog = gtk_dialog_new_with_buttons (
+            "Pairing \xe2\x80\x94 join window open",
+            GTK_WINDOW (main_dialog),
+            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            "Cancel", GTK_RESPONSE_CANCEL,
+            NULL);
+    gtk_window_set_default_size (GTK_WINDOW (dialog), 380, -1);
+
+    content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
+    box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+    gtk_container_set_border_width (GTK_CONTAINER (box), 16);
+    gtk_box_pack_start (GTK_BOX (content), box, TRUE, TRUE, 0);
+
+    intro = gtk_label_new (
+            "The hub is accepting new devices. Put each device into pairing "
+            "mode now \xe2\x80\x94 usually by holding its button or "
+            "power-cycling it.");
+    gtk_label_set_line_wrap (GTK_LABEL (intro), TRUE);
+    gtk_label_set_xalign    (GTK_LABEL (intro), 0.0);
+    gtk_box_pack_start (GTK_BOX (box), intro, FALSE, FALSE, 0);
+
+    spinner = gtk_spinner_new ();
+    gtk_spinner_start (GTK_SPINNER (spinner));
+    spin_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign (spin_row, GTK_ALIGN_CENTER);
+    gtk_box_pack_start (GTK_BOX (spin_row), spinner, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (box), spin_row, FALSE, FALSE, 0);
+
+    progress = gtk_progress_bar_new ();
+    gtk_box_pack_start (GTK_BOX (box), progress, FALSE, FALSE, 0);
+
+    label = gtk_label_new (NULL);
+    gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+    gtk_box_pack_start (GTK_BOX (box), label, FALSE, FALSE, 0);
+
+    ctx->join_dialog     = dialog;
+    ctx->join_progress   = progress;
+    ctx->join_label      = label;
+    ctx->join_total      = ZB_JOIN_WINDOW_SECONDS;
+    ctx->join_left       = ZB_JOIN_WINDOW_SECONDS;
+    ctx->join_base_count = zb_device_count (ctx);
+    ctx->join_joined     = 0;
+    zb_join_update (ctx);
+
+    g_signal_connect (dialog, "response",
+                      G_CALLBACK (zb_join_on_response), ctx);
+    g_signal_connect (dialog, "destroy",
+                      G_CALLBACK (zb_join_on_destroy), ctx);
+
+    /* Open the window and spin the section marker; the dialog's own modality
+     * blocks the parent's input without us desensitising it. */
+    zb_join_publish (ctx, TRUE, ZB_JOIN_WINDOW_SECONDS);
+    if (ctx->join_spinner != NULL)
+    {
+        gtk_widget_show (ctx->join_spinner);
+        gtk_spinner_start (GTK_SPINNER (ctx->join_spinner));
+    }
+    pn_device_dialog_set_status (ctx->shell,
+                                 "Join window open \xe2\x80\x94 pairing for "
+                                 "5 minutes\xe2\x80\xa6");
+
+    ctx->join_tick_id = g_timeout_add_seconds (1, zb_join_tick, ctx);
+
+    gtk_widget_show_all (dialog);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Dialog construction                                                */
 /* ------------------------------------------------------------------ */
 
@@ -2199,6 +2512,48 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                          "Once connected, your devices appear in the list on "
                          "the left and the counter shows messages arriving.",
                          grid);
+
+    /* Join-window section: opens a 5-minute pairing window on the
+     * coordinator.  Its Start button stays insensitive until a broker is
+     * applied (zb_start_source enables it; zb_drop_source disables it). */
+    {
+        GtkWidget *jgrid = gtk_grid_new ();
+        GtkWidget *jcell;
+        GtkWidget *start;
+        GtkWidget *jspinner;
+        gint       jrow = 0;
+
+        gtk_grid_set_row_spacing    (GTK_GRID (jgrid), 8);
+        gtk_grid_set_column_spacing (GTK_GRID (jgrid), 12);
+
+        jcell = pn_device_form_attach_control_row (GTK_GRID (jgrid), jrow++,
+                                                   "Pairing");
+        start = gtk_button_new_with_label ("Open join window\xe2\x80\xa6");
+        gtk_widget_set_tooltip_text (start,
+                "Let new Zigbee devices join the network for 5 minutes.");
+        gtk_widget_set_sensitive (start, FALSE);   /* until a broker applies */
+        g_signal_connect (start, "clicked",
+                          G_CALLBACK (zb_on_join_clicked), ctx);
+        gtk_box_pack_start (GTK_BOX (jcell), start, FALSE, FALSE, 0);
+
+        jspinner = gtk_spinner_new ();
+        gtk_widget_set_no_show_all (jspinner, TRUE);   /* shown only when open */
+        gtk_box_pack_start (GTK_BOX (jcell), jspinner, FALSE, FALSE, 0);
+
+        ctx->join_start   = start;
+        ctx->join_spinner = jspinner;
+
+        zb_add_section_desc (inner, "Pairing (join window)",
+                             "To add a new device, open a join window: for the "
+                             "next five minutes the hub will accept devices "
+                             "trying to connect. Press the button, then put each "
+                             "new device into pairing mode (often by holding its "
+                             "button). A progress window shows the countdown and "
+                             "how many have joined, and lets you stop early. "
+                             "This becomes available once a broker is connected "
+                             "above.", jgrid);
+    }
+
     pn_device_dialog_append_page (ctx->shell, tab, "Broker");
 
     /* Left-hand device list.  We do not auto-scan (there is nothing to
@@ -2238,6 +2593,16 @@ zb_dev_ctx_free (gpointer data)
      * sibling qdata before or after us; drop our borrowed pointer first
      * so nothing below touches it. */
     ctx->shell = NULL;
+
+    /* Belt-and-suspenders: a running join window holds a nested main loop in
+     * zb_on_join_clicked, so this normally cannot fire mid-window -- but never
+     * leave a timer pointing at freed ctx. */
+    if (ctx->join_tick_id != 0)
+    {
+        g_source_remove (ctx->join_tick_id);
+        ctx->join_tick_id = 0;
+    }
+
     zb_drop_source (ctx);
     g_clear_pointer (&ctx->devices, json_node_unref);
 
