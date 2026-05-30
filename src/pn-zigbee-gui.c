@@ -81,6 +81,17 @@
  * whenever the device set changes.  We read it to populate the list. */
 #define ZB_DEV_DEVICES_TOPIC "zigbee2mqtt/bridge/devices"
 
+/* Device-level settings (friendly name, disabled, retain, definition.options,
+ * removal) are set through Z2M's bridge request API, not the per-device
+ * "<name>/set" path the live-state controls use.  Requests go to these topics;
+ * Z2M acknowledges on the matching bridge/response/device/<cmd> topic, which we
+ * surface in the status bar (a successful change also re-publishes
+ * bridge/devices, so the list refreshes itself). */
+#define ZB_DEV_RENAME_TOPIC   "zigbee2mqtt/bridge/request/device/rename"
+#define ZB_DEV_OPTIONS_TOPIC  "zigbee2mqtt/bridge/request/device/options"
+#define ZB_DEV_REMOVE_TOPIC   "zigbee2mqtt/bridge/request/device/remove"
+#define ZB_DEV_RESPONSE_PREFIX "zigbee2mqtt/bridge/response/device/"
+
 /* What kind of widget a built settings control is, so the value-seeding
  * pass (item f) and, later, write-back (item g) can read/write it without
  * re-deriving the expose type. */
@@ -93,6 +104,16 @@ typedef enum
     ZB_CTL_TEXT        /* a GtkEntry */
 } ZbCtlKind;
 
+/* Which Z2M channel a control's changed value is published to on Apply.  The
+ * live-state exposes (TODO 9) all use ZB_TGT_SET; the device-level settings
+ * (this change) route through the bridge request API instead. */
+typedef enum
+{
+    ZB_TGT_SET,        /* zigbee2mqtt/<name>/set, key=value (default) */
+    ZB_TGT_OPTIONS,    /* device/options, into {id, options:{key:value}} */
+    ZB_TGT_RENAME      /* device/rename, the value is the new friendly name */
+} ZbTarget;
+
 /* One built settings control, bound to the device-state JSON key it shows.
  * Tracked per-dialog and cleared in lockstep with the device pages (the
  * widget itself is owned by its notebook page; this record only borrows
@@ -102,6 +123,7 @@ typedef struct
 {
     gchar      *key;        /* resolved device-state property key (owned) */
     ZbCtlKind   kind;
+    ZbTarget    target;     /* which Z2M channel Apply publishes it to */
     GtkWidget  *widget;     /* the control or value label (borrowed) */
     gchar      *value_on;   /* binary mapping, owned; NULL -> JSON bool */
     gchar      *value_off;
@@ -455,6 +477,33 @@ zb_ingest_devices (ZbDevCtx *ctx, PnMessage *message)
                                   kept, kept == 1 ? "" : "s");
 }
 
+/* Surface a bridge/response/device/<cmd> acknowledgement in the status bar.
+ * Z2M replies here to our rename/options/remove requests with
+ * {status: "ok"|"error", error, data}; a successful change also re-publishes
+ * bridge/devices, so the list refreshes itself -- we only report the outcome
+ * (and a failure's reason, which the user otherwise would not see). */
+static void
+zb_report_response (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
+{
+    const gchar *cmd     = topic + strlen (ZB_DEV_RESPONSE_PREFIX);
+    JsonNode    *payload = pn_message_get_member (message, "payload");
+    JsonObject  *obj;
+    const gchar *status, *error;
+
+    if (payload == NULL || !JSON_NODE_HOLDS_OBJECT (payload))
+        return;
+    obj    = json_node_get_object (payload);
+    status = zb_peek_string (obj, "status");
+    error  = zb_peek_string (obj, "error");
+
+    if (g_strcmp0 (status, "error") == 0)
+        pn_device_dialog_set_statusf (ctx->shell, "Device %s failed: %s",
+                                      cmd,
+                                      error != NULL ? error : "unknown error");
+    else
+        pn_device_dialog_set_statusf (ctx->shell, "Device %s: ok.", cmd);
+}
+
 /* "message" signal handler.  The base PnMqtt marshals every PUBLISH onto
  * the main thread before emitting, so we can touch GTK directly here. */
 static void
@@ -474,6 +523,8 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
     topic = pn_message_get_topic (message);
     if (g_strcmp0 (topic, ZB_DEV_DEVICES_TOPIC) == 0)
         zb_ingest_devices (ctx, message);
+    else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_RESPONSE_PREFIX))
+        zb_report_response (ctx, topic, message);
     else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_TOPIC_PREFIX))
         zb_capture_state (ctx, topic, message);
 }
@@ -751,18 +802,66 @@ zb_numeric_range (JsonObject *exp, gdouble *min, gdouble *max, gdouble *step)
     }
 }
 
+/* Paint one control's widget from a JSON value, by the control's kind.  The
+ * shared painter for the live-state seed (item f/h) and the build-time
+ * value_default seed of a device-option control.  Does not touch the baseline
+ * -- the caller anchors it after. */
+static void
+zb_seed_control_node (ZbControl *c, JsonNode *v)
+{
+    if (v == NULL)
+        return;
+
+    switch (c->kind)
+    {
+    case ZB_CTL_BINARY:
+        gtk_switch_set_active (GTK_SWITCH (c->widget),
+                               zb_binary_is_on (v, c->value_on));
+        break;
+    case ZB_CTL_NUMERIC:
+        {
+            gdouble d;
+            if (zb_node_get_double (v, &d))
+                gtk_spin_button_set_value (GTK_SPIN_BUTTON (c->widget), d);
+        }
+        break;
+    case ZB_CTL_ENUM:
+        {
+            gchar *s = zb_json_to_display (v);
+            gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+            g_free (s);
+        }
+        break;
+    case ZB_CTL_TEXT:
+        {
+            gchar *s = zb_json_to_display (v);
+            gtk_entry_set_text (GTK_ENTRY (c->widget), s);
+            g_free (s);
+        }
+        break;
+    case ZB_CTL_READONLY:
+        {
+            gchar *s = zb_json_to_display (v);
+            pn_device_form_set_value (GTK_LABEL (c->widget), s);
+            g_free (s);
+        }
+        break;
+    }
+}
+
 /* Record a built control bound to @key for the seed / write-back passes.
  * Takes ownership of @key, @value_on and @value_off.  Returns the tracked
  * control (owned by ctx->controls) so the caller can also file it under a
  * page. */
 static ZbControl *
-zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind,
+zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind, ZbTarget target,
                   GtkWidget *widget, gchar *value_on, gchar *value_off)
 {
     ZbControl *c = g_new0 (ZbControl, 1);
 
     c->key       = key;
     c->kind      = kind;
+    c->target    = target;
     c->widget    = widget;
     c->value_on  = value_on;
     c->value_off = value_off;
@@ -854,17 +953,42 @@ zb_control_set_member (JsonObject *obj, ZbControl *c)
     }
 }
 
+/* Publish @obj (an owned JsonObject, consumed here) as the data.payload of a
+ * message to @topic through the hidden sink.  The single MQTT publish path for
+ * every write the dialog makes -- "<name>/set", "<name>/get" and the bridge
+ * requests (device/options, device/rename, device/remove).  A no-op when no
+ * sink is connected (the caller has already reported that case). */
+static void
+zb_publish_to (ZbDevCtx *ctx, const gchar *topic, JsonObject *obj)
+{
+    JsonNode  *node;
+    PnMessage *msg;
+
+    if (ctx->sink == NULL)
+    {
+        json_object_unref (obj);
+        return;
+    }
+    msg  = pn_message_new (NULL, topic);
+    node = json_node_new (JSON_NODE_OBJECT);
+    json_node_take_object (node, obj);              /* transfers obj */
+    pn_message_set_member (msg, "payload", node);   /* transfers node */
+    pn_node_receive_message (PN_NODE (ctx->sink), msg);
+    g_object_unref (msg);
+}
+
 /* (g) Collect the controls on @page_controls whose value changed since the
- * last seed/Apply into a Z2M set-payload, publish it to
- * zigbee2mqtt/<name>/set through the hidden sink, and adopt the applied
- * values as the new baseline so a second press resends nothing. */
+ * last seed/Apply and publish them, each on the channel its target names: live
+ * state to zigbee2mqtt/<name>/set, device options to the bridge device/options
+ * request, and the friendly name to the device/rename request.  Order matters:
+ * a rename changes the name the other two address, so it goes last.  The
+ * applied values are adopted as the new baseline so a second press resends
+ * nothing. */
 static void
 zb_publish_changes (ZbDevCtx *ctx, GPtrArray *page_controls)
 {
-    JsonObject *obj;
-    JsonNode   *node;
-    PnMessage  *msg;
-    gchar      *topic;
+    JsonObject *setobj, *optobj;
+    gchar      *rename_to = NULL;       /* owned new friendly name, or NULL */
     guint       i, changed = 0;
 
     if (ctx->sink == NULL)
@@ -876,47 +1000,90 @@ zb_publish_changes (ZbDevCtx *ctx, GPtrArray *page_controls)
     if (ctx->selected_name == NULL)
         return;
 
-    obj = json_object_new ();
+    setobj = json_object_new ();
+    optobj = json_object_new ();
     for (i = 0; i < page_controls->len; i++)
     {
         ZbControl *c   = g_ptr_array_index (page_controls, i);
         gchar     *cur = zb_control_read_string (c);
 
-        if (c->baseline == NULL || g_strcmp0 (cur, c->baseline) != 0)
-        {
-            zb_control_set_member (obj, c);
-            g_free (c->baseline);
-            c->baseline = cur;     /* adopt the applied value */
-            changed++;
-        }
-        else
+        if (c->baseline != NULL && g_strcmp0 (cur, c->baseline) == 0)
         {
             g_free (cur);
+            continue;                   /* unchanged -- nothing to publish */
         }
+
+        if (c->target == ZB_TGT_RENAME)
+        {
+            if (cur == NULL || *cur == '\0')
+            {
+                g_free (cur);
+                continue;               /* never rename to an empty name */
+            }
+            g_free (rename_to);
+            rename_to = g_strdup (cur);  /* the entry text is the new name */
+        }
+        else if (c->target == ZB_TGT_OPTIONS)
+            zb_control_set_member (optobj, c);
+        else
+            zb_control_set_member (setobj, c);
+
+        g_free (c->baseline);
+        c->baseline = cur;              /* adopt the applied value */
+        changed++;
     }
 
     if (changed == 0)
     {
-        json_object_unref (obj);
+        json_object_unref (setobj);
+        json_object_unref (optobj);
         pn_device_dialog_set_statusf (ctx->shell, "%s — no changes to apply.",
                                       ctx->selected_name);
         return;
     }
 
-    topic = g_strdup_printf ("%s%s/set", ZB_DEV_TOPIC_PREFIX,
-                             ctx->selected_name);
-    msg  = pn_message_new (NULL, topic);
-    node = json_node_new (JSON_NODE_OBJECT);
-    json_node_take_object (node, obj);          /* transfers obj */
-    pn_message_set_member (msg, "payload", node);   /* transfers node */
+    /* SET: zigbee2mqtt/<name>/set { key: value, … } */
+    if (json_object_get_size (setobj) > 0)
+    {
+        gchar *topic = g_strdup_printf ("%s%s/set", ZB_DEV_TOPIC_PREFIX,
+                                        ctx->selected_name);
+        zb_publish_to (ctx, topic, setobj);    /* consumes setobj */
+        g_free (topic);
+    }
+    else
+        json_object_unref (setobj);
 
-    pn_node_receive_message (PN_NODE (ctx->sink), msg);
-    g_object_unref (msg);
+    /* OPTIONS: device/options { id: <name>, options: { key: value, … } } --
+     * Z2M merges into the device's existing options, so only the changed keys
+     * are sent and untouched (unseeded) ones are preserved. */
+    if (json_object_get_size (optobj) > 0)
+    {
+        JsonObject *req = json_object_new ();
+        json_object_set_string_member (req, "id", ctx->selected_name);
+        json_object_set_object_member (req, "options", optobj);  /* transfers */
+        zb_publish_to (ctx, ZB_DEV_OPTIONS_TOPIC, req);          /* consumes */
+    }
+    else
+        json_object_unref (optobj);
+
+    /* RENAME last: device/rename { from: <old>, to: <new> }.  Track the new
+     * name locally so subsequent get/set/options address the device correctly;
+     * Z2M re-publishes bridge/devices on success, which refreshes the list. */
+    if (rename_to != NULL && g_strcmp0 (rename_to, ctx->selected_name) != 0)
+    {
+        JsonObject *req = json_object_new ();
+        json_object_set_string_member (req, "from", ctx->selected_name);
+        json_object_set_string_member (req, "to",   rename_to);
+        zb_publish_to (ctx, ZB_DEV_RENAME_TOPIC, req);           /* consumes */
+
+        g_free (ctx->selected_name);
+        ctx->selected_name = g_strdup (rename_to);
+    }
+    g_free (rename_to);
 
     pn_device_dialog_set_statusf (ctx->shell, "Applied %u change%s to %s.",
                                   changed, changed == 1 ? "" : "s",
                                   ctx->selected_name);
-    g_free (topic);
 }
 
 static void
@@ -969,8 +1136,6 @@ static void
 zb_publish_get (ZbDevCtx *ctx, const gchar *key)
 {
     JsonObject *obj;
-    JsonNode   *node;
-    PnMessage  *msg;
     gchar      *topic;
 
     if (ctx->sink == NULL)
@@ -987,17 +1152,11 @@ zb_publish_get (ZbDevCtx *ctx, const gchar *key)
 
     topic = g_strdup_printf ("%s%s/get", ZB_DEV_TOPIC_PREFIX,
                              ctx->selected_name);
-    msg  = pn_message_new (NULL, topic);
-    node = json_node_new (JSON_NODE_OBJECT);
-    json_node_take_object (node, obj);              /* transfers obj */
-    pn_message_set_member (msg, "payload", node);   /* transfers node */
-
-    pn_node_receive_message (PN_NODE (ctx->sink), msg);
-    g_object_unref (msg);
+    zb_publish_to (ctx, topic, obj);                /* consumes obj */
+    g_free (topic);
 
     pn_device_dialog_set_statusf (ctx->shell, "Requested %s from %s…",
                                   key, ctx->selected_name);
-    g_free (topic);
 }
 
 static void
@@ -1083,13 +1242,14 @@ zb_add_numeric_presets (GtkWidget *cell, GtkWidget *spin, JsonArray *presets)
  * (borrowed; may be NULL) so the page's Apply can publish it. */
 static void
 zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
-                     JsonObject *exp, GPtrArray *page_controls)
+                     JsonObject *exp, GPtrArray *page_controls,
+                     ZbTarget target, gboolean force_settable)
 {
     const gchar *type     = zb_peek_string (exp, "type");
     const gchar *label    = zb_expose_label (exp);
     const gchar *desc     = zb_peek_string (exp, "description");
     gint         access   = zb_expose_access (exp);
-    gboolean     settable = (access & 2) != 0;
+    gboolean     settable = (access & 2) != 0 || force_settable;
     gboolean     gettable = (access & 4) != 0;
     gchar       *key      = zb_expose_key (exp);
     gint         used     = *row;   /* the row these cells land in (j: get) */
@@ -1175,14 +1335,26 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
     /* (j) A gettable expose (access bit 4) gets a refresh button in its own
      * column 2, so the per-control "re-read from the device" affordances line
      * up on the right edge whatever the row's control type.  The hexpanding
-     * value cell at column 1 pushes them flush right. */
-    if (key != NULL && gettable)
+     * value cell at column 1 pushes them flush right.  Only live-state (SET)
+     * controls support "<name>/get"; device options have no get endpoint. */
+    if (key != NULL && gettable && target == ZB_TGT_SET)
         gtk_grid_attach (grid, zb_make_get_button (ctx, key), 2, used, 1, 1);
 
     if (key != NULL)
     {
-        ZbControl *c = zb_track_control (ctx, key, kind, w,
+        ZbControl *c = zb_track_control (ctx, key, kind, target, w,
                                          value_on, value_off);
+
+        /* Device-option controls have no live source to seed from (item f
+         * only paints from the per-device state topic, which carries the
+         * set-properties); seed them from the expose's value_default at build
+         * time so the snapshot baseline is the device's default and only
+         * genuine edits publish. */
+        if (kind != ZB_CTL_READONLY && target == ZB_TGT_OPTIONS &&
+            json_object_has_member (exp, "value_default"))
+            zb_seed_control_node (c, json_object_get_member (exp,
+                                                             "value_default"));
+
         if (page_controls != NULL && kind != ZB_CTL_READONLY)
             g_ptr_array_add (page_controls, c);
     }
@@ -1230,7 +1402,7 @@ zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
             g_ptr_array_add (nested, exp);   /* composite -> sub-section */
         else
             zb_build_expose_row (ctx, GTK_GRID (grid), &row, exp,
-                                 page_controls);
+                                 page_controls, ZB_TGT_SET, FALSE);
     }
 
     if (row > 0)
@@ -1298,34 +1470,245 @@ zb_add_readonly_row (GtkGrid *grid, gint *row, const gchar *key, gchar *value)
     g_free (value);
 }
 
-/* (i) A read-only identity page for a device with no settings to edit (no
- * definition -- the Coordinator -- or empty exposes): the addressing /
- * vendor fields straight off the inventory record, so the device is not a
- * blank right-hand pane.  Built directly from @dev, not from ctx->state. */
+/* ------------------------------------------------------------------ */
+/*  Device page: editable device-level (all-devices) settings          */
+/* ------------------------------------------------------------------ */
+
+/* Build an editable text-entry row bound to @key on channel @target, seeded
+ * from @seed (borrowed, may be NULL), tracked and filed under @page. */
 static void
-zb_build_identity_page (ZbDevCtx *ctx, JsonObject *dev)
+zb_add_text_control (ZbDevCtx *ctx, GtkGrid *grid, gint *row, GPtrArray *page,
+                     const gchar *label, const gchar *key, ZbTarget target,
+                     const gchar *seed, const gchar *tip)
 {
-    GtkWidget  *inner;
-    GtkWidget  *tab  = pn_device_form_new_tab (&inner);
-    GtkWidget  *grid = gtk_grid_new ();
-    JsonObject *def  = NULL;
-    JsonNode   *dn;
-    gint        row  = 0;
+    GtkWidget *entry = GTK_WIDGET (
+            pn_device_form_attach_entry_row (grid, (*row)++, label));
+    ZbControl *c;
+
+    if (seed != NULL)
+        gtk_entry_set_text (GTK_ENTRY (entry), seed);
+    if (tip != NULL)
+        gtk_widget_set_tooltip_text (entry, tip);
+    c = zb_track_control (ctx, g_strdup (key), ZB_CTL_TEXT, target, entry,
+                          NULL, NULL);
+    g_ptr_array_add (page, c);
+}
+
+/* Build an editable boolean switch row bound to @key (device options channel),
+ * seeded to @on, tracked and filed under @page.  value_on/off stay NULL so the
+ * write emits a JSON bool -- the shape device/options expects. */
+static void
+zb_add_switch_control (ZbDevCtx *ctx, GtkGrid *grid, gint *row, GPtrArray *page,
+                       const gchar *label, const gchar *key, gboolean on,
+                       const gchar *tip)
+{
+    GtkWidget *cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+    GtkWidget *sw   = gtk_switch_new ();
+    ZbControl *c;
+
+    gtk_widget_set_halign (sw, GTK_ALIGN_START);
+    gtk_switch_set_active (GTK_SWITCH (sw), on);
+    gtk_box_pack_start (GTK_BOX (cell), sw, FALSE, FALSE, 0);
+    if (tip != NULL)
+        gtk_widget_set_tooltip_text (sw, tip);
+    c = zb_track_control (ctx, g_strdup (key), ZB_CTL_BINARY, ZB_TGT_OPTIONS,
+                          sw, NULL, NULL);
+    g_ptr_array_add (page, c);
+}
+
+/* Build an editable integer spin row bound to @key (device options channel),
+ * seeded to @value, with an optional dim @unit suffix, tracked under @page. */
+static void
+zb_add_int_control (ZbDevCtx *ctx, GtkGrid *grid, gint *row, GPtrArray *page,
+                    const gchar *label, const gchar *key, gdouble value,
+                    gdouble min, gdouble max, const gchar *unit,
+                    const gchar *tip)
+{
+    GtkWidget *cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+    GtkWidget *spin = pn_device_spin_new_with_range (min, max, 1);
+    ZbControl *c;
+
+    gtk_spin_button_set_digits (GTK_SPIN_BUTTON (spin), 0);
+    gtk_spin_button_set_value  (GTK_SPIN_BUTTON (spin), value);
+    gtk_box_pack_start (GTK_BOX (cell), spin, FALSE, FALSE, 0);
+    if (unit != NULL && *unit != '\0')
+    {
+        gchar           *u  = g_strconcat (" ", unit, NULL);
+        GtkWidget       *sl = gtk_label_new (u);
+        GtkStyleContext *sc = gtk_widget_get_style_context (sl);
+        gtk_style_context_add_class (sc, "dim-label");
+        gtk_box_pack_start (GTK_BOX (cell), sl, FALSE, FALSE, 0);
+        g_free (u);
+    }
+    if (tip != NULL)
+        gtk_widget_set_tooltip_text (spin, tip);
+    c = zb_track_control (ctx, g_strdup (key), ZB_CTL_NUMERIC, ZB_TGT_OPTIONS,
+                          spin, NULL, NULL);
+    g_ptr_array_add (page, c);
+}
+
+/* Publish a device/remove request for the selected device. */
+static void
+zb_do_remove (ZbDevCtx *ctx, gboolean force)
+{
+    JsonObject *req;
+
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before removing.");
+        return;
+    }
+    if (ctx->selected_name == NULL)
+        return;
+
+    req = json_object_new ();
+    json_object_set_string_member  (req, "id",    ctx->selected_name);
+    json_object_set_boolean_member (req, "force", force);
+    zb_publish_to (ctx, ZB_DEV_REMOVE_TOPIC, req);    /* consumes req */
+
+    pn_device_dialog_set_statusf (ctx->shell, "Requested removal of %s…",
+                                  ctx->selected_name);
+}
+
+/* Confirm, then remove the selected device.  The modal warning carries a
+ * "Force" check (remove from the Z2M database even if the device does not
+ * respond on-air -- the escape hatch for an already-dead device). */
+static void
+zb_on_remove_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx  *ctx = user_data;
+    GtkWidget *parent, *dialog, *area, *force_chk, *rm;
+    gint       resp;
+
+    (void) button;
+    if (ctx->selected_name == NULL || ctx->shell == NULL)
+        return;
+
+    parent = pn_device_dialog_get_dialog (ctx->shell);
+    dialog = gtk_message_dialog_new (
+            GTK_WINDOW (parent),
+            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            GTK_MESSAGE_WARNING, GTK_BUTTONS_NONE,
+            "Remove \xe2\x80\x9c%s\xe2\x80\x9d from the Zigbee network?",
+            ctx->selected_name);
+    gtk_message_dialog_format_secondary_text (
+            GTK_MESSAGE_DIALOG (dialog),
+            "The device will be unpaired and removed from Zigbee2MQTT. "
+            "This cannot be undone -- you would have to re-pair it to use "
+            "it again.");
+
+    force_chk = gtk_check_button_new_with_label (
+            "Force: remove from the database even if the device does not "
+            "respond");
+    area = gtk_message_dialog_get_message_area (GTK_MESSAGE_DIALOG (dialog));
+    gtk_box_pack_start (GTK_BOX (area), force_chk, FALSE, FALSE, 0);
+    gtk_widget_show (force_chk);
+
+    gtk_dialog_add_button (GTK_DIALOG (dialog), "Cancel", GTK_RESPONSE_CANCEL);
+    rm = gtk_dialog_add_button (GTK_DIALOG (dialog), "Remove",
+                                GTK_RESPONSE_ACCEPT);
+    gtk_style_context_add_class (gtk_widget_get_style_context (rm),
+                                 "destructive-action");
+    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+
+    resp = gtk_dialog_run (GTK_DIALOG (dialog));
+    if (resp == GTK_RESPONSE_ACCEPT)
+        zb_do_remove (ctx, gtk_toggle_button_get_active (
+                              GTK_TOGGLE_BUTTON (force_chk)));
+    gtk_widget_destroy (dialog);
+}
+
+/* (i, this change) The always-present "Device" page: the device-level
+ * settings every device shares -- editable friendly name, description and the
+ * generic Z2M per-device options -- plus a read-only addressing/vendor info
+ * section and a guarded Remove button.  Built directly from @dev (the
+ * inventory record), not from ctx->state: friendly_name / disabled /
+ * description seed from the record; the other options have no live source over
+ * MQTT and seed from their Z2M defaults (only a change the user makes is
+ * published, and Z2M merges, so unseeded options are never clobbered). */
+static void
+zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
+{
+    GtkWidget   *inner;
+    GtkWidget   *tab   = pn_device_form_new_tab (&inner);
+    GtkWidget   *grid  = gtk_grid_new ();
+    GtkWidget   *info  = gtk_grid_new ();
+    GtkWidget   *rmbox, *remove;
+    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed editable controls */
+    JsonObject  *def   = NULL;
+    JsonNode    *dn;
+    const gchar *fname = zb_peek_string (dev, "friendly_name");
+    const gchar *descr = zb_peek_string (dev, "description");
+    gboolean     disabled;
+    JsonNode    *dis;
+    gint         row   = 0;
 
     gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
     gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
 
-    zb_add_readonly_row (GTK_GRID (grid), &row, "Friendly name",
-                         zb_peek_display (dev, "friendly_name"));
-    zb_add_readonly_row (GTK_GRID (grid), &row, "IEEE address",
-                         zb_peek_display (dev, "ieee_address"));
-    zb_add_readonly_row (GTK_GRID (grid), &row, "Type",
-                         zb_peek_display (dev, "type"));
-    zb_add_readonly_row (GTK_GRID (grid), &row, "Network address",
-                         zb_peek_display (dev, "network_address"));
-    zb_add_readonly_row (GTK_GRID (grid), &row, "Power source",
-                         zb_peek_display (dev, "power_source"));
+    /* Editable, seeded accurately from the inventory record. */
+    zb_add_text_control (ctx, GTK_GRID (grid), &row, page, "Friendly name",
+                         "friendly_name", ZB_TGT_RENAME, fname,
+                         "The name this device is published under "
+                         "(zigbee2mqtt/<name>). Renaming republishes the "
+                         "device list.");
+    zb_add_text_control (ctx, GTK_GRID (grid), &row, page, "Description",
+                         "description", ZB_TGT_OPTIONS, descr,
+                         "Free-text note stored with the device in Z2M.");
 
+    dis      = json_object_has_member (dev, "disabled")
+                   ? json_object_get_member (dev, "disabled") : NULL;
+    disabled = zb_binary_is_on (dis, NULL);
+    zb_add_switch_control (ctx, GTK_GRID (grid), &row, page, "Disabled",
+                           "disabled", disabled,
+                           "Exclude the device from network scans, "
+                           "availability and group state.");
+
+    pn_device_form_add_section (inner, "Device", grid);
+
+    /* Generic per-device options with no live source over MQTT -- seeded from
+     * Z2M defaults.  Only a value the user changes is sent (device/options
+     * merges), so a default shown here never overwrites an unseen real value. */
+    {
+        GtkWidget *opt = gtk_grid_new ();
+        gint       orow = 0;
+
+        gtk_grid_set_row_spacing    (GTK_GRID (opt), 8);
+        gtk_grid_set_column_spacing (GTK_GRID (opt), 12);
+        zb_add_switch_control (ctx, GTK_GRID (opt), &orow, page, "Retain",
+                               "retain", FALSE,
+                               "Retain this device's MQTT messages.");
+        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Retention",
+                            "retention", 0, 0, 1000000, "s",
+                            "MQTT message expiry (requires retain + MQTT v5).");
+        zb_add_switch_control (ctx, GTK_GRID (opt), &orow, page, "Optimistic",
+                               "optimistic", TRUE,
+                               "Publish optimistic state after a /set.");
+        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Debounce",
+                            "debounce", 0, 0, 1000000, "s",
+                            "Debounce this device's messages.");
+        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "Throttle",
+                            "throttle", 0, 0, 1000000, "s",
+                            "Minimum time between published payloads.");
+        zb_add_int_control (ctx, GTK_GRID (opt), &orow, page, "QoS",
+                            "qos", 0, 0, 2, NULL,
+                            "MQTT QoS level for this device's messages.");
+        pn_device_form_add_section (inner, "Options (defaults shown)", opt);
+    }
+
+    /* Read-only addressing / vendor info. */
+    gtk_grid_set_row_spacing    (GTK_GRID (info), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (info), 12);
+    row = 0;
+    zb_add_readonly_row (GTK_GRID (info), &row, "IEEE address",
+                         zb_peek_display (dev, "ieee_address"));
+    zb_add_readonly_row (GTK_GRID (info), &row, "Type",
+                         zb_peek_display (dev, "type"));
+    zb_add_readonly_row (GTK_GRID (info), &row, "Network address",
+                         zb_peek_display (dev, "network_address"));
+    zb_add_readonly_row (GTK_GRID (info), &row, "Power source",
+                         zb_peek_display (dev, "power_source"));
     if (json_object_has_member (dev, "definition"))
     {
         dn = json_object_get_member (dev, "definition");
@@ -1334,16 +1717,40 @@ zb_build_identity_page (ZbDevCtx *ctx, JsonObject *dev)
     }
     if (def != NULL)
     {
-        zb_add_readonly_row (GTK_GRID (grid), &row, "Vendor",
+        zb_add_readonly_row (GTK_GRID (info), &row, "Vendor",
                              zb_peek_display (def, "vendor"));
-        zb_add_readonly_row (GTK_GRID (grid), &row, "Model",
+        zb_add_readonly_row (GTK_GRID (info), &row, "Model",
                              zb_peek_display (def, "model"));
-        zb_add_readonly_row (GTK_GRID (grid), &row, "Description",
-                             zb_peek_display (def, "description"));
+    }
+    if (row > 0)
+    {
+        pn_device_form_add_section (inner, "Info", info);
+    }
+    else
+    {
+        g_object_ref_sink (info);
+        gtk_widget_destroy (info);
+        g_object_unref (info);
     }
 
-    pn_device_form_add_section (inner, "Device", grid);
-    pn_device_dialog_append_page (ctx->shell, tab, "Info");
+    /* Apply (g) publishes the editable controls above, partitioned by target
+     * (rename / device options).  Then a right-aligned destructive Remove. */
+    zb_add_page_apply (ctx, inner, page);      /* consumes page */
+
+    rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
+    gtk_widget_set_margin_top (rmbox, 8);
+    remove = gtk_button_new_with_label ("Remove device\xe2\x80\xa6");
+    gtk_style_context_add_class (gtk_widget_get_style_context (remove),
+                                 "destructive-action");
+    gtk_widget_set_tooltip_text (remove,
+            "Unpair this device and remove it from Zigbee2MQTT.");
+    g_signal_connect (remove, "clicked",
+                      G_CALLBACK (zb_on_remove_clicked), ctx);
+    gtk_box_pack_start (GTK_BOX (rmbox), remove, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (inner), rmbox, FALSE, FALSE, 0);
+
+    pn_device_dialog_append_page (ctx->shell, tab, "Device");
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
 }
@@ -1364,49 +1771,46 @@ zb_build_options_page (ZbDevCtx *ctx, JsonArray *options)
     guint      n, i;
     gint       row = 0;
 
+    GPtrArray *page;
+
     n = json_array_get_length (options);
     if (n == 0)
         return;
 
     tab  = pn_device_form_new_tab (&inner);
     grid = gtk_grid_new ();
+    page = g_ptr_array_new ();                 /* borrowed editable controls */
     gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
     gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
 
+    /* Each option is editable, routed to the device/options request and seeded
+     * from value_default (no live source over MQTT).  force_settable=TRUE since
+     * option exposes often omit the access bitmap; a composite option (one with
+     * `features`) is rare and surfaces as a read-only raw row via the leaf
+     * path rather than recursing. */
     for (i = 0; i < n; i++)
     {
-        JsonNode    *elem = json_array_get_element (options, i);
-        JsonObject  *opt;
-        const gchar *desc;
-        GtkLabel    *label;
-        gchar       *value;
+        JsonNode   *elem = json_array_get_element (options, i);
+        JsonObject *opt;
 
         if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
             continue;
-        opt   = json_node_get_object (elem);
-        label = pn_device_form_attach_label_row (GTK_GRID (grid), row++,
-                                                 zb_expose_label (opt));
-        desc  = zb_peek_string (opt, "description");
-        if (desc != NULL)
-            gtk_widget_set_tooltip_text (GTK_WIDGET (label), desc);
-        /* No live source for an option's current value; show its default. */
-        value = zb_peek_display (opt, "value_default");
-        if (value != NULL)
-        {
-            pn_device_form_set_value (label, value);
-            g_free (value);
-        }
+        opt = json_node_get_object (elem);
+        zb_build_expose_row (ctx, GTK_GRID (grid), &row, opt, page,
+                             ZB_TGT_OPTIONS, TRUE);
     }
 
     if (row > 0)
     {
-        pn_device_form_add_section (inner, "Options", grid);
+        pn_device_form_add_section (inner, "Options (defaults shown)", grid);
+        zb_add_page_apply (ctx, inner, page);  /* (g) consumes page */
         pn_device_dialog_append_page (ctx->shell, tab, "Options");
         g_ptr_array_add (ctx->device_pages, tab);
         gtk_widget_show_all (tab);
     }
     else
     {
+        g_ptr_array_unref (page);
         g_object_ref_sink (tab);
         gtk_widget_destroy (tab);
         g_object_unref (tab);
@@ -1432,7 +1836,8 @@ zb_build_settings_page (ZbDevCtx *ctx, GPtrArray *exps, const gchar *title)
     gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
     for (i = 0; i < exps->len; i++)
         zb_build_expose_row (ctx, GTK_GRID (grid), &row,
-                             g_ptr_array_index (exps, i), page);
+                             g_ptr_array_index (exps, i), page,
+                             ZB_TGT_SET, FALSE);
 
     pn_device_form_add_section (inner, title, grid);
     zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
@@ -1499,15 +1904,15 @@ zb_build_bare_pages (ZbDevCtx *ctx, GPtrArray *bare)
 /* (d, i) Walk the whole exposes tree of the selected device into pages:
  * each top-level composite/typed expose gets its own page; the bare
  * top-level exposes (binary/numeric/enum/text/…) collect under a single
- * "Settings" page.  A device with no editable exposes falls back to a
- * read-only identity page, and definition.options (when present) gets its
- * own read-only "Options" page.  Then jump to the first device page. */
+ * "Settings" page.  Every device then gets an editable "Device" page (the
+ * device-level all-devices settings + read-only info + Remove), and
+ * definition.options (when present) gets its own editable "Options" page.
+ * Then jump to the first device page. */
 static void
 zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
                        JsonArray *exposes, JsonArray *options)
 {
     GPtrArray *bare = g_ptr_array_new ();
-    guint      pages_before = ctx->device_pages->len;
     guint      n, i;
 
     if (exposes != NULL)
@@ -1533,13 +1938,13 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
     zb_build_bare_pages (ctx, bare);
     g_ptr_array_unref (bare);
 
-    /* (i) No editable expose produced a page (no definition / empty
-     * exposes) -- fall back to a read-only identity page so the pane is
-     * not blank. */
-    if (ctx->device_pages->len == pages_before)
-        zb_build_identity_page (ctx, dev);
+    /* The always-present editable Device page: friendly name, the generic
+     * per-device options and a guarded Remove, plus read-only addressing
+     * info.  Also guarantees the pane is never blank for a device with no
+     * editable exposes (the Coordinator, empty exposes). */
+    zb_build_device_page (ctx, dev);
 
-    /* (i) Surface the device's Z2M options on their own read-only page. */
+    /* Surface the device's definition.options on their own editable page. */
     if (options != NULL)
         zb_build_options_page (ctx, options);
 
@@ -1582,41 +1987,7 @@ zb_seed_controls (ZbDevCtx *ctx)
         if (v == NULL)
             continue;
 
-        switch (c->kind)
-        {
-        case ZB_CTL_BINARY:
-            gtk_switch_set_active (GTK_SWITCH (c->widget),
-                                   zb_binary_is_on (v, c->value_on));
-            break;
-        case ZB_CTL_NUMERIC:
-            {
-                gdouble d;
-                if (zb_node_get_double (v, &d))
-                    gtk_spin_button_set_value (GTK_SPIN_BUTTON (c->widget), d);
-            }
-            break;
-        case ZB_CTL_ENUM:
-            {
-                gchar *s = zb_json_to_display (v);
-                gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
-                g_free (s);
-            }
-            break;
-        case ZB_CTL_TEXT:
-            {
-                gchar *s = zb_json_to_display (v);
-                gtk_entry_set_text (GTK_ENTRY (c->widget), s);
-                g_free (s);
-            }
-            break;
-        case ZB_CTL_READONLY:
-            {
-                gchar *s = zb_json_to_display (v);
-                pn_device_form_set_value (GTK_LABEL (c->widget), s);
-                g_free (s);
-            }
-            break;
-        }
+        zb_seed_control_node (c, v);
 
         /* The painted value is now the device's confirmed truth: anchor
          * the baseline to it so a later Apply diffs against what the device
