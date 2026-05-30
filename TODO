@@ -250,13 +250,22 @@ publish path; no second mosquitto client to hand-roll.
       text, read-only label), leaving the build default / "—" placeholder
       when the key is absent. Called right after the page build on select;
       the live-repaint-on-new-state half is item h.
-   g. Apply / write-back. Give each settable page (or each control) an
-      Apply that collects the changed settable properties into a
-      JsonObject, builds a PnMessage with topic
-      zigbee2mqtt/<friendly_name>/set and data.payload = that object,
-      and hands it to the hidden PnMqttSink via
-      pn_node_receive_message. Create/destroy the sink alongside the
-      source in zb_start_source / zb_drop_source (same broker-profile).
+   g. Apply / write-back. DONE (2026-05-30). A hidden PnMqttSink
+      (pn_mqtt_sink_new) is created in zb_start_source and dropped in
+      zb_drop_source against the same broker-profile as the source, with
+      retain=FALSE (a "<name>/set" command must not be retained). Each
+      settable page carries its own borrowed control list and a bottom
+      "Settings"-style Apply button (zb_add_page_apply); on click
+      zb_publish_changes collects the controls whose value differs from a
+      per-control baseline into a JsonObject (binary -> value_on/off string
+      or JSON bool; numeric -> int/double per the spin's digits; enum ->
+      selected id; text -> raw), builds a PnMessage (topic
+      zigbee2mqtt/<friendly_name>/set, data.payload = that object) and hands
+      it to the sink via pn_node_receive_message. Baselines are snapshotted
+      after the seed (zb_snapshot_baselines) and re-adopted on a successful
+      Apply, so a second press resends nothing; "no changes" is reported,
+      not published. (The applied value is the baseline until item h
+      repaints from the device's confirmed re-publish.)
    h. Reflect confirmed state. Z2M re-publishes the device's full state
       on zigbee2mqtt/<friendly_name> after a successful set, which the
       live-state capture already receives -- repaint the shown controls

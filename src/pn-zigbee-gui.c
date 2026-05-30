@@ -48,8 +48,10 @@
 #include <pn-device-spin.h>
 #include <pn-vault.h>
 #include <pn-mqtt.h>
+#include <pn-mqtt-sink.h>
 #include <pn-mqtt-profile.h>
 #include <pn-message.h>
+#include <pn-node.h>
 
 #include <json-glib/json-glib.h>
 
@@ -58,6 +60,10 @@
  * the menu raises the existing one rather than opening a second. */
 #define ZB_DEV_CTX_QDATA    "pn-zigbee-dev-ctx"
 #define ZB_DEV_DIALOG_QDATA "pn-zigbee-dev-dialog"
+
+/* The borrowed per-page control list a settings page's Apply button
+ * carries, so its handler publishes only that page's controls. */
+#define ZB_PAGE_CONTROLS_QDATA "pn-zigbee-page-controls"
 
 /* The hidden source always watches the whole Zigbee2MQTT tree. */
 #define ZB_DEV_SUBSCRIBE_TOPIC "zigbee2mqtt/#"
@@ -95,6 +101,11 @@ typedef struct
     GtkWidget  *widget;     /* the control or value label (borrowed) */
     gchar      *value_on;   /* binary mapping, owned; NULL -> JSON bool */
     gchar      *value_off;
+
+    /* The control's value as of the last seed / Apply (owned string, NULL
+     * for read-only rows), so Apply publishes only the properties the user
+     * actually changed.  Updated on seed and on a successful Apply. */
+    gchar      *baseline;
 } ZbControl;
 
 typedef struct
@@ -114,6 +125,13 @@ typedef struct
     PnMqtt          *source;
     gulong           msg_handler;   /* "message" handler id, 0 if none */
     guint64          count;         /* messages received since last Apply */
+
+    /* The hidden MQTT Sink, created/destroyed alongside the source against
+     * the same broker profile.  The write-back channel: a settings page's
+     * Apply hands it a PnMessage (topic zigbee2mqtt/<name>/set, structured
+     * data.payload) via pn_node_receive_message and it PUBLISHes it.  NULL
+     * until the first Apply; owned -- released with g_object_unref. */
+    PnMqttSink      *sink;
 
     /* Our own deep copy of the most recent bridge/devices inventory (a
      * JSON array of device records).  The payload node handed to the
@@ -153,6 +171,7 @@ zb_control_free (gpointer data)
     g_free (c->key);
     g_free (c->value_on);
     g_free (c->value_off);
+    g_free (c->baseline);
     g_free (c);
 }
 
@@ -176,6 +195,10 @@ zb_drop_source (ZbDevCtx *ctx)
     /* unref -> dispose joins the mosquitto network thread and sends a
      * clean DISCONNECT, so no callback can fire after this returns. */
     g_clear_object (&ctx->source);
+
+    /* The write-back sink rides the same lifecycle as the source -- its
+     * dispose likewise joins its own network thread and disconnects. */
+    g_clear_object (&ctx->sink);
 }
 
 /* Drop the dynamically-built device pages from the notebook, keeping the
@@ -487,6 +510,17 @@ zb_start_source (ZbDevCtx *ctx)
     ctx->msg_handler = g_signal_connect (ctx->source, "message",
                                          G_CALLBACK (zb_on_message), ctx);
 
+    /* The write-back sink shares the broker profile.  It publishes each
+     * inbound message's data.payload to its envelope topic, so a settings
+     * Apply just sets the topic + payload (zb_publish_changes).  Set
+     * retain FALSE: a Z2M "<name>/set" command must not be retained, or
+     * the broker would replay it to Z2M on every reconnect/restart. */
+    ctx->sink = pn_mqtt_sink_new ();
+    g_object_set (ctx->sink,
+                  "broker-profile", id,
+                  "retain",         FALSE,
+                  NULL);
+
     pn_device_dialog_set_statusf (ctx->shell,
                                   "Connecting via %s and watching %s…",
                                   (label != NULL && *label != '\0')
@@ -695,8 +729,10 @@ zb_numeric_range (JsonObject *exp, gdouble *min, gdouble *max, gdouble *step)
 }
 
 /* Record a built control bound to @key for the seed / write-back passes.
- * Takes ownership of @key, @value_on and @value_off. */
-static void
+ * Takes ownership of @key, @value_on and @value_off.  Returns the tracked
+ * control (owned by ctx->controls) so the caller can also file it under a
+ * page. */
+static ZbControl *
 zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind,
                   GtkWidget *widget, gchar *value_on, gchar *value_off)
 {
@@ -708,6 +744,196 @@ zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind,
     c->value_on  = value_on;
     c->value_off = value_off;
     g_ptr_array_add (ctx->controls, c);
+    return c;
+}
+
+/* The current value of an editable control as a stable string, for change
+ * detection against its baseline.  NULL for a read-only row (never in a
+ * page's settable list). */
+static gchar *
+zb_control_read_string (ZbControl *c)
+{
+    switch (c->kind)
+    {
+    case ZB_CTL_BINARY:
+        return g_strdup (gtk_switch_get_active (GTK_SWITCH (c->widget))
+                             ? "1" : "0");
+    case ZB_CTL_NUMERIC:
+        {
+            GtkSpinButton *sp = GTK_SPIN_BUTTON (c->widget);
+            gint           digits = gtk_spin_button_get_digits (sp);
+            if (digits == 0)
+                return g_strdup_printf ("%d",
+                                        gtk_spin_button_get_value_as_int (sp));
+            return g_strdup_printf ("%.*f", digits,
+                                    gtk_spin_button_get_value (sp));
+        }
+    case ZB_CTL_ENUM:
+        {
+            const gchar *id =
+                gtk_combo_box_get_active_id (GTK_COMBO_BOX (c->widget));
+            return g_strdup (id != NULL ? id : "");
+        }
+    case ZB_CTL_TEXT:
+        return g_strdup (gtk_entry_get_text (GTK_ENTRY (c->widget)));
+    case ZB_CTL_READONLY:
+        break;
+    }
+    return NULL;
+}
+
+/* Add @c's current value to the set-payload object @obj under its key,
+ * shaped the way Z2M's "<name>/set" endpoint expects (a binary's
+ * value_on/value_off string, or a JSON bool when unmapped; a numeric as
+ * int or double per the spin's digits; an enum's selected id; raw text). */
+static void
+zb_control_set_member (JsonObject *obj, ZbControl *c)
+{
+    switch (c->kind)
+    {
+    case ZB_CTL_BINARY:
+        {
+            gboolean on = gtk_switch_get_active (GTK_SWITCH (c->widget));
+            if (c->value_on != NULL)
+                json_object_set_string_member (
+                        obj, c->key,
+                        on ? c->value_on
+                           : (c->value_off != NULL ? c->value_off : "OFF"));
+            else
+                json_object_set_boolean_member (obj, c->key, on);
+        }
+        break;
+    case ZB_CTL_NUMERIC:
+        {
+            GtkSpinButton *sp = GTK_SPIN_BUTTON (c->widget);
+            if (gtk_spin_button_get_digits (sp) == 0)
+                json_object_set_int_member (
+                        obj, c->key, gtk_spin_button_get_value_as_int (sp));
+            else
+                json_object_set_double_member (
+                        obj, c->key, gtk_spin_button_get_value (sp));
+        }
+        break;
+    case ZB_CTL_ENUM:
+        {
+            const gchar *id =
+                gtk_combo_box_get_active_id (GTK_COMBO_BOX (c->widget));
+            if (id != NULL)
+                json_object_set_string_member (obj, c->key, id);
+        }
+        break;
+    case ZB_CTL_TEXT:
+        json_object_set_string_member (obj, c->key,
+                                       gtk_entry_get_text (GTK_ENTRY (c->widget)));
+        break;
+    case ZB_CTL_READONLY:
+        break;
+    }
+}
+
+/* (g) Collect the controls on @page_controls whose value changed since the
+ * last seed/Apply into a Z2M set-payload, publish it to
+ * zigbee2mqtt/<name>/set through the hidden sink, and adopt the applied
+ * values as the new baseline so a second press resends nothing. */
+static void
+zb_publish_changes (ZbDevCtx *ctx, GPtrArray *page_controls)
+{
+    JsonObject *obj;
+    JsonNode   *node;
+    PnMessage  *msg;
+    gchar      *topic;
+    guint       i, changed = 0;
+
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before writing.");
+        return;
+    }
+    if (ctx->selected_name == NULL)
+        return;
+
+    obj = json_object_new ();
+    for (i = 0; i < page_controls->len; i++)
+    {
+        ZbControl *c   = g_ptr_array_index (page_controls, i);
+        gchar     *cur = zb_control_read_string (c);
+
+        if (c->baseline == NULL || g_strcmp0 (cur, c->baseline) != 0)
+        {
+            zb_control_set_member (obj, c);
+            g_free (c->baseline);
+            c->baseline = cur;     /* adopt the applied value */
+            changed++;
+        }
+        else
+        {
+            g_free (cur);
+        }
+    }
+
+    if (changed == 0)
+    {
+        json_object_unref (obj);
+        pn_device_dialog_set_statusf (ctx->shell, "%s — no changes to apply.",
+                                      ctx->selected_name);
+        return;
+    }
+
+    topic = g_strdup_printf ("%s%s/set", ZB_DEV_TOPIC_PREFIX,
+                             ctx->selected_name);
+    msg  = pn_message_new (NULL, topic);
+    node = json_node_new (JSON_NODE_OBJECT);
+    json_node_take_object (node, obj);          /* transfers obj */
+    pn_message_set_member (msg, "payload", node);   /* transfers node */
+
+    pn_node_receive_message (PN_NODE (ctx->sink), msg);
+    g_object_unref (msg);
+
+    pn_device_dialog_set_statusf (ctx->shell, "Applied %u change%s to %s.",
+                                  changed, changed == 1 ? "" : "s",
+                                  ctx->selected_name);
+    g_free (topic);
+}
+
+static void
+zb_on_page_apply_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx  *ctx      = user_data;
+    GPtrArray *controls = g_object_get_data (G_OBJECT (button),
+                                             ZB_PAGE_CONTROLS_QDATA);
+
+    if (controls != NULL)
+        zb_publish_changes (ctx, controls);
+}
+
+/* Add a right-aligned Apply button to @inner wired to publish @page_controls
+ * (a borrowed-element array, transferred to the button's qdata so it dies
+ * with the page).  When the page has no settable control, frees the array
+ * and adds nothing. */
+static void
+zb_add_page_apply (ZbDevCtx *ctx, GtkWidget *inner, GPtrArray *page_controls)
+{
+    GtkWidget *apply_box;
+    GtkWidget *apply;
+
+    if (page_controls->len == 0)
+    {
+        g_ptr_array_unref (page_controls);
+        return;
+    }
+
+    apply_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign     (apply_box, GTK_ALIGN_END);
+    gtk_widget_set_margin_top (apply_box, 8);
+    apply = gtk_button_new_with_label ("Apply");
+    gtk_box_pack_start (GTK_BOX (apply_box), apply, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (inner), apply_box, FALSE, FALSE, 0);
+
+    g_object_set_data_full (G_OBJECT (apply), ZB_PAGE_CONTROLS_QDATA,
+                            page_controls, (GDestroyNotify) g_ptr_array_unref);
+    g_signal_connect (apply, "clicked",
+                      G_CALLBACK (zb_on_page_apply_clicked), ctx);
 }
 
 /* (e) Map one leaf expose to a row at *@row of @grid, honouring the
@@ -715,9 +941,11 @@ zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind,
  * control, anything else a read-only value row.  An unknown type also
  * falls back to a read-only raw-value row so a newer Z2M expose surfaces
  * rather than vanishing.  The control is tracked under its resolved key
- * for seeding. */
+ * for seeding.  A settable control is also filed under @page_controls
+ * (borrowed; may be NULL) so the page's Apply can publish it. */
 static void
-zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row, JsonObject *exp)
+zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
+                     JsonObject *exp, GPtrArray *page_controls)
 {
     const gchar *type     = zb_peek_string (exp, "type");
     const gchar *label    = zb_expose_label (exp);
@@ -801,7 +1029,12 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row, JsonObject *exp)
         gtk_widget_set_tooltip_text (w, desc);
 
     if (key != NULL)
-        zb_track_control (ctx, key, kind, w, value_on, value_off);
+    {
+        ZbControl *c = zb_track_control (ctx, key, kind, w,
+                                         value_on, value_off);
+        if (page_controls != NULL && kind != ZB_CTL_READONLY)
+            g_ptr_array_add (page_controls, c);
+    }
     else
     {
         g_free (key);
@@ -816,7 +1049,8 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row, JsonObject *exp)
  * own sub-section.  No section is added when the grid stays empty. */
 static void
 zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
-                         const gchar *title, JsonArray *features)
+                         const gchar *title, JsonArray *features,
+                         GPtrArray *page_controls)
 {
     GtkWidget *grid;
     GPtrArray *nested;
@@ -844,7 +1078,8 @@ zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
         if (zb_object_array (exp, "features") != NULL)
             g_ptr_array_add (nested, exp);   /* composite -> sub-section */
         else
-            zb_build_expose_row (ctx, GTK_GRID (grid), &row, exp);
+            zb_build_expose_row (ctx, GTK_GRID (grid), &row, exp,
+                                 page_controls);
     }
 
     if (row > 0)
@@ -857,7 +1092,8 @@ zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
     {
         JsonObject *exp = g_ptr_array_index (nested, i);
         zb_add_features_section (ctx, inner, zb_expose_label (exp),
-                                 zb_object_array (exp, "features"));
+                                 zb_object_array (exp, "features"),
+                                 page_controls);
     }
     g_ptr_array_unref (nested);
 }
@@ -870,9 +1106,11 @@ zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
     GtkWidget   *inner;
     GtkWidget   *tab   = pn_device_form_new_tab (&inner);
     const gchar *title = zb_expose_label (exp);
+    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed settable controls */
 
     zb_add_features_section (ctx, inner, title,
-                             zb_object_array (exp, "features"));
+                             zb_object_array (exp, "features"), page);
+    zb_add_page_apply (ctx, inner, page);      /* (g) consumes page */
     pn_device_dialog_append_page (ctx->shell, tab, title);
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
@@ -911,15 +1149,17 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonArray *exposes)
         GtkWidget *inner;
         GtkWidget *tab  = pn_device_form_new_tab (&inner);
         GtkWidget *grid = gtk_grid_new ();
+        GPtrArray *page = g_ptr_array_new ();   /* borrowed settable controls */
         gint       row  = 0;
 
         gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
         gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
         for (i = 0; i < bare->len; i++)
             zb_build_expose_row (ctx, GTK_GRID (grid), &row,
-                                 g_ptr_array_index (bare, i));
+                                 g_ptr_array_index (bare, i), page);
 
         pn_device_form_add_section (inner, "Settings", grid);
+        zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
         pn_device_dialog_append_page (ctx->shell, tab, "Settings");
         g_ptr_array_add (ctx->device_pages, tab);
         gtk_widget_show_all (tab);
@@ -997,6 +1237,26 @@ zb_seed_controls (ZbDevCtx *ctx)
     }
 }
 
+/* (g) Snapshot every editable control's just-seeded value as its baseline,
+ * so the first Apply publishes only what the user actually changes.  Run
+ * after zb_seed_controls -- including for controls left at their build
+ * default because no live value was captured. */
+static void
+zb_snapshot_baselines (ZbDevCtx *ctx)
+{
+    guint i;
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl *c = g_ptr_array_index (ctx->controls, i);
+
+        if (c->kind == ZB_CTL_READONLY)
+            continue;
+        g_free (c->baseline);
+        c->baseline = zb_control_read_string (c);
+    }
+}
+
 /* A device row was clicked.  Tear down the previously-shown device pages,
  * resolve the clicked row back to its inventory record and stash its
  * friendly name + exposes/options for the page builder.  @row is borrowed;
@@ -1035,10 +1295,13 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
     options = zb_definition_array (dev, "options");
 
     /* (d, e) walk the exposes tree into editable settings pages, then
-     * (f) seed every built control from the captured live state.  Options
-     * still get only the status note below (their own page is item i). */
+     * (f) seed every built control from the captured live state and (g)
+     * snapshot baselines so each page's Apply publishes only changes.
+     * Options still get only the status note below (their own page is
+     * item i). */
     zb_build_device_pages (ctx, exposes);
     zb_seed_controls (ctx);
+    zb_snapshot_baselines (ctx);
 
     n_exposes = (exposes != NULL) ? json_array_get_length (exposes) : 0;
     pn_device_dialog_set_statusf (
