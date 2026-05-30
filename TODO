@@ -293,6 +293,22 @@ publish path; no second mosquitto client to hand-roll.
       cleanly (zb_clear_device_pages, zb_start_source), and closing frees
       the state map and the sink (zb_dev_ctx_free -> g_hash_table_unref +
       zb_drop_source) -- all already in place from a-c/g.
-   j. Optional later. Group exposes by `endpoint` into per-endpoint
-      pages for multi-gang devices; expose numeric `presets`; a
-      per-control "get" refresh for access bit 4.
+   j. Optional polish. DONE (2026-05-30). Three independent touches:
+      (1) Endpoint-aware pages. zb_page_title appends a composite expose's
+      `endpoint` to its tab ("Switch (left)") when not already in the
+      label, so a multi-gang device's identically-typed gangs get distinct
+      tabs; zb_build_bare_pages groups the bare top-level exposes by
+      `endpoint` into per-endpoint "Settings (<ep>)" pages (first-seen
+      order, shared "" group for endpoint-less ones), falling back to the
+      single plain "Settings" page when there is only one group -- the
+      common single-endpoint device is unchanged. (2) Numeric presets.
+      zb_add_numeric_presets adds a "Preset…" combo beside a numeric spin
+      built from the expose's `presets` ({name,value}); picking a row drives
+      the spin and snaps back to the placeholder, so it is a write-only
+      shortcut that never fights the seeded live value. (3) Per-control get.
+      A gettable expose (access bit 4) gets a flat refresh button in its own
+      grid column 2 (zb_make_get_button) that publishes {"<key>":""} to
+      zigbee2mqtt/<name>/get through the same hidden sink (zb_publish_get);
+      the device's re-report repaints the control via the item-h path. The
+      buttons line up flush-right across every row type since the value cell
+      hexpands.

@@ -65,6 +65,10 @@
  * carries, so its handler publishes only that page's controls. */
 #define ZB_PAGE_CONTROLS_QDATA "pn-zigbee-page-controls"
 
+/* The owned device-state key a per-control "get" refresh button carries
+ * (item j), so its handler knows which property to re-request. */
+#define ZB_GET_KEY_QDATA "pn-zigbee-get-key"
+
 /* The hidden source always watches the whole Zigbee2MQTT tree. */
 #define ZB_DEV_SUBSCRIBE_TOPIC "zigbee2mqtt/#"
 
@@ -955,6 +959,121 @@ zb_add_page_apply (ZbDevCtx *ctx, GtkWidget *inner, GPtrArray *page_controls)
                       G_CALLBACK (zb_on_page_apply_clicked), ctx);
 }
 
+/* (j) Publish a Z2M "<name>/get" request for a single property, asking the
+ * device to re-report its current value.  The payload is { "<key>": "" } --
+ * the shape Z2M's get endpoint expects (the value is ignored).  The device's
+ * reply arrives as a bare state publish and repaints the control through
+ * zb_capture_state -> zb_seed_controls (item h), so there is nothing to wait
+ * on here. */
+static void
+zb_publish_get (ZbDevCtx *ctx, const gchar *key)
+{
+    JsonObject *obj;
+    JsonNode   *node;
+    PnMessage  *msg;
+    gchar      *topic;
+
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Pick a broker and press Apply before refreshing.");
+        return;
+    }
+    if (ctx->selected_name == NULL || key == NULL)
+        return;
+
+    obj = json_object_new ();
+    json_object_set_string_member (obj, key, "");
+
+    topic = g_strdup_printf ("%s%s/get", ZB_DEV_TOPIC_PREFIX,
+                             ctx->selected_name);
+    msg  = pn_message_new (NULL, topic);
+    node = json_node_new (JSON_NODE_OBJECT);
+    json_node_take_object (node, obj);              /* transfers obj */
+    pn_message_set_member (msg, "payload", node);   /* transfers node */
+
+    pn_node_receive_message (PN_NODE (ctx->sink), msg);
+    g_object_unref (msg);
+
+    pn_device_dialog_set_statusf (ctx->shell, "Requested %s from %s…",
+                                  key, ctx->selected_name);
+    g_free (topic);
+}
+
+static void
+zb_on_get_clicked (GtkButton *button, gpointer user_data)
+{
+    const gchar *key = g_object_get_data (G_OBJECT (button), ZB_GET_KEY_QDATA);
+
+    zb_publish_get (user_data, key);
+}
+
+/* (j) A small flat refresh button that re-requests @key from the device.
+ * Carries its own owned copy of @key (freed with the button) so it does not
+ * depend on the tracked control outliving it. */
+static GtkWidget *
+zb_make_get_button (ZbDevCtx *ctx, const gchar *key)
+{
+    GtkWidget *btn = gtk_button_new_from_icon_name ("view-refresh",
+                                                    GTK_ICON_SIZE_BUTTON);
+
+    gtk_button_set_relief (GTK_BUTTON (btn), GTK_RELIEF_NONE);
+    gtk_widget_set_valign  (btn, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text (btn, "Refresh this value from the device");
+    g_object_set_data_full (G_OBJECT (btn), ZB_GET_KEY_QDATA,
+                            g_strdup (key), g_free);
+    g_signal_connect (btn, "clicked", G_CALLBACK (zb_on_get_clicked), ctx);
+    return btn;
+}
+
+/* (j) Append a named-preset combo for a numeric expose into @cell: a leading
+ * "Preset…" placeholder followed by one row per { name, value } in @presets,
+ * each row's id the stringified value.  Picking a row drives @spin to that
+ * value; the combo itself is write-only (not a tracked control) and snaps
+ * back to the placeholder via no seed, so it never fights the live value. */
+static void
+zb_on_preset_changed (GtkComboBox *combo, gpointer user_data)
+{
+    GtkSpinButton *spin = user_data;
+    const gchar   *id   = gtk_combo_box_get_active_id (combo);
+
+    if (id == NULL || *id == '\0')
+        return;
+    gtk_spin_button_set_value (spin, g_ascii_strtod (id, NULL));
+    /* Return to the placeholder so the same preset can be re-picked and the
+     * combo never misrepresents the spin's (independently edited) value. */
+    gtk_combo_box_set_active (combo, 0);
+}
+
+static void
+zb_add_numeric_presets (GtkWidget *cell, GtkWidget *spin, JsonArray *presets)
+{
+    GtkWidget *combo = pn_device_combo_new ();
+    guint      n     = json_array_get_length (presets), i;
+
+    gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo), "", "Preset…");
+    for (i = 0; i < n; i++)
+    {
+        JsonNode    *elem = json_array_get_element (presets, i);
+        JsonObject  *po;
+        const gchar *name;
+        gchar        id[G_ASCII_DTOSTR_BUF_SIZE];
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        po   = json_node_get_object (elem);
+        name = zb_peek_string (po, "name");
+        g_ascii_dtostr (id, sizeof id, zb_peek_double (po, "value", 0.0));
+        gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo), id,
+                                   name != NULL ? name : id);
+    }
+    gtk_combo_box_set_active (GTK_COMBO_BOX (combo), 0);
+    gtk_widget_set_tooltip_text (combo, "Jump to a named preset value");
+    g_signal_connect (combo, "changed",
+                      G_CALLBACK (zb_on_preset_changed), spin);
+    gtk_box_pack_start (GTK_BOX (cell), combo, FALSE, FALSE, 0);
+}
+
 /* (e) Map one leaf expose to a row at *@row of @grid, honouring the
  * access bitmap: a settable expose (bit 2) gets its typed editable
  * control, anything else a read-only value row.  An unknown type also
@@ -969,8 +1088,11 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
     const gchar *type     = zb_peek_string (exp, "type");
     const gchar *label    = zb_expose_label (exp);
     const gchar *desc     = zb_peek_string (exp, "description");
-    gboolean     settable = (zb_expose_access (exp) & 2) != 0;
+    gint         access   = zb_expose_access (exp);
+    gboolean     settable = (access & 2) != 0;
+    gboolean     gettable = (access & 4) != 0;
     gchar       *key      = zb_expose_key (exp);
+    gint         used     = *row;   /* the row these cells land in (j: get) */
     GtkWidget   *cell;
     GtkWidget   *w        = NULL;
     ZbCtlKind    kind     = ZB_CTL_READONLY;
@@ -989,8 +1111,9 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
     else if (settable && g_strcmp0 (type, "numeric") == 0)
     {
         gdouble      min, max, step;
-        const gchar *unit = zb_peek_string (exp, "unit");
-        gint         digits = 0;
+        const gchar *unit    = zb_peek_string (exp, "unit");
+        JsonArray   *presets = zb_object_array (exp, "presets");
+        gint         digits  = 0;
         gdouble      s;
 
         zb_numeric_range (exp, &min, &max, &step);
@@ -1009,6 +1132,8 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
             gtk_box_pack_start (GTK_BOX (cell), sl, FALSE, FALSE, 0);
             g_free (u);
         }
+        if (presets != NULL && json_array_get_length (presets) > 0)
+            zb_add_numeric_presets (cell, w, presets);   /* (j) */
         kind = ZB_CTL_NUMERIC;
     }
     else if (settable && g_strcmp0 (type, "enum") == 0)
@@ -1046,6 +1171,13 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
 
     if (desc != NULL && w != NULL)
         gtk_widget_set_tooltip_text (w, desc);
+
+    /* (j) A gettable expose (access bit 4) gets a refresh button in its own
+     * column 2, so the per-control "re-read from the device" affordances line
+     * up on the right edge whatever the row's control type.  The hexpanding
+     * value cell at column 1 pushes them flush right. */
+    if (key != NULL && gettable)
+        gtk_grid_attach (grid, zb_make_get_button (ctx, key), 2, used, 1, 1);
 
     if (key != NULL)
     {
@@ -1117,15 +1249,31 @@ zb_add_features_section (ZbDevCtx *ctx, GtkWidget *inner,
     g_ptr_array_unref (nested);
 }
 
+/* (j) A device page's title: the expose label, with the `endpoint` appended
+ * ("Switch (left)") when present and not already part of the label, so a
+ * multi-gang device's identically-typed gangs ("switch" / "switch") get
+ * distinct, readable page tabs instead of two tabs with the same name.
+ * Owned -- free with g_free. */
+static gchar *
+zb_page_title (JsonObject *exp)
+{
+    const gchar *label = zb_expose_label (exp);
+    const gchar *ep    = zb_peek_string (exp, "endpoint");
+
+    if (ep != NULL && *ep != '\0' && strstr (label, ep) == NULL)
+        return g_strdup_printf ("%s (%s)", label, ep);
+    return g_strdup (label);
+}
+
 /* (d) A top-level composite/typed expose (switch/light/cover/… or
  * "composite") becomes its own notebook page built from its features. */
 static void
 zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
 {
-    GtkWidget   *inner;
-    GtkWidget   *tab   = pn_device_form_new_tab (&inner);
-    const gchar *title = zb_expose_label (exp);
-    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed settable controls */
+    GtkWidget *inner;
+    GtkWidget *tab   = pn_device_form_new_tab (&inner);
+    gchar     *title = zb_page_title (exp);    /* (j) endpoint-disambiguated */
+    GPtrArray *page  = g_ptr_array_new ();      /* borrowed settable controls */
 
     zb_add_features_section (ctx, inner, title,
                              zb_object_array (exp, "features"), page);
@@ -1133,6 +1281,7 @@ zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
     pn_device_dialog_append_page (ctx->shell, tab, title);
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
+    g_free (title);
 }
 
 /* Append a read-only "key | value" row to @grid for @value (owned, freed
@@ -1267,6 +1416,86 @@ zb_build_options_page (ZbDevCtx *ctx, JsonArray *options)
     }
 }
 
+/* Build one "Settings"-style page titled @title from the bare exposes in
+ * @exps, with its own borrowed control list + Apply button. */
+static void
+zb_build_settings_page (ZbDevCtx *ctx, GPtrArray *exps, const gchar *title)
+{
+    GtkWidget *inner;
+    GtkWidget *tab  = pn_device_form_new_tab (&inner);
+    GtkWidget *grid = gtk_grid_new ();
+    GPtrArray *page = g_ptr_array_new ();   /* borrowed settable controls */
+    gint       row  = 0;
+    guint      i;
+
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    for (i = 0; i < exps->len; i++)
+        zb_build_expose_row (ctx, GTK_GRID (grid), &row,
+                             g_ptr_array_index (exps, i), page);
+
+    pn_device_form_add_section (inner, title, grid);
+    zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
+    pn_device_dialog_append_page (ctx->shell, tab, title);
+    g_ptr_array_add (ctx->device_pages, tab);
+    gtk_widget_show_all (tab);
+}
+
+/* (j) Turn the bare (featureless) top-level exposes into Settings pages,
+ * grouped by their `endpoint`: a multi-gang device whose gangs surface as
+ * flat per-endpoint exposes (rather than composite features) then lands one
+ * page per endpoint -- "Settings (left)" / "Settings (right)" -- instead of
+ * one undifferentiated list.  The endpoint-less exposes share the "" group.
+ * First-seen order is preserved.  The common single-group case (one endpoint,
+ * or none) keeps the plain "Settings" title, identical to the pre-grouping
+ * behaviour. */
+static void
+zb_build_bare_pages (ZbDevCtx *ctx, GPtrArray *bare)
+{
+    GPtrArray  *order  = g_ptr_array_new ();   /* endpoint keys, first-seen */
+    GHashTable *groups = g_hash_table_new (g_str_hash, g_str_equal);
+    guint       i;
+
+    if (bare->len == 0)
+    {
+        g_hash_table_destroy (groups);
+        g_ptr_array_unref (order);
+        return;
+    }
+
+    for (i = 0; i < bare->len; i++)
+    {
+        JsonObject  *exp = g_ptr_array_index (bare, i);
+        const gchar *ep  = zb_peek_string (exp, "endpoint");
+        const gchar *key = (ep != NULL && *ep != '\0') ? ep : "";
+        GPtrArray   *grp = g_hash_table_lookup (groups, key);
+
+        if (grp == NULL)
+        {
+            grp = g_ptr_array_new ();
+            g_hash_table_insert (groups, (gpointer) key, grp);
+            g_ptr_array_add (order, (gpointer) key);   /* borrowed JSON string */
+        }
+        g_ptr_array_add (grp, exp);
+    }
+
+    for (i = 0; i < order->len; i++)
+    {
+        const gchar *key   = g_ptr_array_index (order, i);
+        GPtrArray   *grp   = g_hash_table_lookup (groups, key);
+        gchar       *title = (*key != '\0' && order->len > 1)
+                                 ? g_strdup_printf ("Settings (%s)", key)
+                                 : g_strdup ("Settings");
+
+        zb_build_settings_page (ctx, grp, title);
+        g_free (title);
+        g_ptr_array_unref (grp);
+    }
+
+    g_hash_table_destroy (groups);
+    g_ptr_array_unref (order);
+}
+
 /* (d, i) Walk the whole exposes tree of the selected device into pages:
  * each top-level composite/typed expose gets its own page; the bare
  * top-level exposes (binary/numeric/enum/text/…) collect under a single
@@ -1299,26 +1528,9 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
         }
     }
 
-    if (bare->len > 0)
-    {
-        GtkWidget *inner;
-        GtkWidget *tab  = pn_device_form_new_tab (&inner);
-        GtkWidget *grid = gtk_grid_new ();
-        GPtrArray *page = g_ptr_array_new ();   /* borrowed settable controls */
-        gint       row  = 0;
-
-        gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
-        gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
-        for (i = 0; i < bare->len; i++)
-            zb_build_expose_row (ctx, GTK_GRID (grid), &row,
-                                 g_ptr_array_index (bare, i), page);
-
-        pn_device_form_add_section (inner, "Settings", grid);
-        zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
-        pn_device_dialog_append_page (ctx->shell, tab, "Settings");
-        g_ptr_array_add (ctx->device_pages, tab);
-        gtk_widget_show_all (tab);
-    }
+    /* (j) The bare top-level exposes become Settings page(s), split by
+     * endpoint for a multi-gang device that surfaces them flat. */
+    zb_build_bare_pages (ctx, bare);
     g_ptr_array_unref (bare);
 
     /* (i) No editable expose produced a page (no definition / empty
