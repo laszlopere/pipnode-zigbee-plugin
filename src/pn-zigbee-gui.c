@@ -1419,7 +1419,14 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
         /* Read-only value row: a non-settable expose, or a settable one
          * of a type we have no editor for (surfaced read-only rather than
          * dropped). */
-        w = GTK_WIDGET (pn_device_form_attach_label_row (grid, (*row)++, label));
+        GtkLabel *value = pn_device_form_attach_label_row (grid, (*row)++, label);
+
+        /* A reported value (not settable) has no meaningful value until the
+         * device sends one: show a "pending" placeholder rather than an empty
+         * cell, which zb_seed_controls overwrites when the report arrives. */
+        if (!settable)
+            pn_device_form_set_value (value, "pending\xe2\x80\xa6");
+        w    = GTK_WIDGET (value);
         kind = ZB_CTL_READONLY;
     }
 
@@ -1936,36 +1943,96 @@ zb_build_options_page (ZbDevCtx *ctx, JsonObject *dev, JsonArray *options)
     gtk_widget_show_all (tab);
 }
 
-/* Build one "Settings"-style page titled @title from the bare exposes in
- * @exps, with its own borrowed control list + Apply button. */
+/* Drop a freshly-created, never-parented grid we ended up not using. */
+static void
+zb_discard_grid (GtkWidget *grid)
+{
+    g_object_ref_sink (grid);
+    gtk_widget_destroy (grid);
+    g_object_unref (grid);
+}
+
+/* Build one page titled @title from the bare exposes in @exps, splitting them
+ * into two sections: a "Settings" section of the controls the user can change
+ * (settable exposes, access bit 2) with the page's Apply button, and a
+ * "Reported values" section of the read-only readings the device sends on its
+ * own (battery, link quality, …).  Either section is omitted when empty; when
+ * there is nothing settable the tab is titled "Status" rather than "Settings",
+ * so a sensor with only readings does not masquerade as having settings. */
 static void
 zb_build_settings_page (ZbDevCtx *ctx, GPtrArray *exps, const gchar *title)
 {
-    GtkWidget *inner;
-    GtkWidget *tab  = pn_device_form_new_tab (&inner);
-    GtkWidget *grid = gtk_grid_new ();
-    GPtrArray *page = g_ptr_array_new ();   /* borrowed settable controls */
-    gint       row  = 0;
-    guint      i;
+    GtkWidget   *inner;
+    GtkWidget   *tab   = pn_device_form_new_tab (&inner);
+    GtkWidget   *sgrid = gtk_grid_new ();   /* settable controls */
+    GtkWidget   *rgrid = gtk_grid_new ();   /* read-only reported values */
+    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed settable controls */
+    gint         srow  = 0, rrow = 0;
+    const gchar *tab_title;
+    gchar       *alt   = NULL;
+    guint        i;
 
-    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
-    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    gtk_grid_set_row_spacing    (GTK_GRID (sgrid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (sgrid), 12);
+    gtk_grid_set_row_spacing    (GTK_GRID (rgrid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (rgrid), 12);
+
+    /* A settable expose (access bit 2) is a control; everything else is a
+     * value the device reports.  Route each to its own grid so the Settings
+     * list holds only things you can actually change. */
     for (i = 0; i < exps->len; i++)
-        zb_build_expose_row (ctx, GTK_GRID (grid), &row,
-                             g_ptr_array_index (exps, i), page,
-                             ZB_TGT_SET, FALSE);
+    {
+        JsonObject *exp = g_ptr_array_index (exps, i);
 
-    zb_add_section_desc (inner, title,
-                         "These are the adjustable features this device offers "
-                         "\xe2\x80\x94 the list depends on what it can do, so it "
-                         "differs from one device to the next. Changing a value "
-                         "sends it straight to the device, which should react "
-                         "within a second or two. If a value springs back, the "
-                         "device refused or adjusted it.", grid);
-    zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
-    pn_device_dialog_append_page (ctx->shell, tab, title);
+        if ((zb_expose_access (exp) & 2) != 0)
+            zb_build_expose_row (ctx, GTK_GRID (sgrid), &srow, exp, page,
+                                 ZB_TGT_SET, FALSE);
+        else
+            zb_build_expose_row (ctx, GTK_GRID (rgrid), &rrow, exp, NULL,
+                                 ZB_TGT_SET, FALSE);
+    }
+
+    if (srow > 0)
+        zb_add_section_desc (inner, title,
+                             "These are the adjustable features this device "
+                             "offers \xe2\x80\x94 the list depends on what it can "
+                             "do, so it differs from one device to the next. "
+                             "Changing a value sends it straight to the device, "
+                             "which should react within a second or two. If a "
+                             "value springs back, the device refused or adjusted "
+                             "it.", sgrid);
+    else
+        zb_discard_grid (sgrid);
+
+    if (rrow > 0)
+        zb_add_section_desc (inner, "Reported values",
+                             "These are the latest readings this device sends on "
+                             "its own \xe2\x80\x94 things like battery level or "
+                             "signal strength. They are shown for information "
+                             "only and cannot be changed here. A reading shows "
+                             "\xe2\x80\x9cpending\xe2\x80\xa6\xe2\x80\x9d until the "
+                             "device next reports it; battery-powered sensors "
+                             "often stay quiet until something happens, so a "
+                             "freshly added device may take a while to fill in. "
+                             "Where a refresh button is shown, it asks the "
+                             "device for that value now.", rgrid);
+    else
+        zb_discard_grid (rgrid);
+
+    /* No settable controls -> this is a status page, not a settings page. */
+    tab_title = title;
+    if (srow == 0 && rrow > 0)
+    {
+        if (g_str_has_prefix (title, "Settings"))
+            alt = g_strconcat ("Status", title + strlen ("Settings"), NULL);
+        tab_title = (alt != NULL) ? alt : "Status";
+    }
+
+    zb_add_page_apply (ctx, inner, page);   /* (g) consumes page; no-op if empty */
+    pn_device_dialog_append_page (ctx->shell, tab, tab_title);
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
+    g_free (alt);
 }
 
 /* (j) Turn the bare (featureless) top-level exposes into Settings pages,
@@ -2535,7 +2602,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
     ctx->shell = pn_device_dialog_new (parent, "Zigbee Devices",
                                        PN_DEVICE_DIALOG_WITH_DEVICE_LIST);
     dialog = pn_device_dialog_get_dialog (ctx->shell);
-    gtk_window_set_default_size (GTK_WINDOW (dialog), 720, 420);
+    gtk_window_set_default_size (GTK_WINDOW (dialog), 720, 630);
 
     tab = pn_device_form_new_tab (&inner);
 
