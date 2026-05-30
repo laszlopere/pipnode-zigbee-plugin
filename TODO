@@ -3,7 +3,7 @@
 ================================================================
 
 Plain text only; no markdown. Level-0 items are numbered
-sequentially; their sub-items are bulleted, not numbered.
+sequentially; their sub-items are lettered (a, b, c, ...).
 
 
 ----------------------------------------------------------------
@@ -30,16 +30,16 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
 
 1. Channel 2 -- replace the hand-rolled red+glyph swap with
    pn_node_set_has_error: DONE (2026-05-29).
-   - DONE. The three zigbee swaps (pn-zigbee-switch.c,
-     pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
-     keep magenta + toggle glyph and toggle has_error while
-     unconfigured (empty friendly-name). Decision: "unconfigured"
-     does count as a node-error state -- has_error is purely visual
-     in the host (no error aggregation / downstream side effect),
-     so the outcome is the identical red ❗ while complying with
-     section 12's ban on hand-rolled swaps. (pn-zigbee-remote.c
-     needs no migration: its friendly-name is an optional filter,
-     not a mandatory config, so it has no unconfigured-error state.)
+   a. DONE. The three zigbee swaps (pn-zigbee-switch.c,
+      pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
+      keep magenta + toggle glyph and toggle has_error while
+      unconfigured (empty friendly-name). Decision: "unconfigured"
+      does count as a node-error state -- has_error is purely visual
+      in the host (no error aggregation / downstream side effect),
+      so the outcome is the identical red ❗ while complying with
+      section 12's ban on hand-rolled swaps. (pn-zigbee-remote.c
+      needs no migration: its friendly-name is an optional filter,
+      not a mandatory config, so it has no unconfigured-error state.)
 
 2. Channel 3 -- adopt pn_node_log_* for diagnostics: DONE
    (2026-05-29).
@@ -50,23 +50,23 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
    Z2M republishes every attribute (state, brightness, linkquality,
    ...), so an absent "state" member is the routine case and would
    flood the per-node log ring on every update.
-   - DONE. src/pn-zigbee-source.c rebuild_device_cache -- a WARNING
-     when the bridge/devices payload is not a JSON array (and the
-     prior cache is now kept untouched on that path); plus one
-     aggregated WARNING ("skipped N entries with no usable
-     friendly_name") instead of per-element spam.
-   - DONE. src/pn-zigbee-switch.c -- WARNING on the unconfigured
-     outbound fallback (user-toggle bounded); INFO on a present-but-
-     non-binary inbound state (e.g. "TOGGLE"). The state==NULL /
-     wrong-topic / unconfigured *read* drops stay silent (see rule).
-   - DONE. src/pn-zigbee-relay-status.c -- INFO on a present-but-
-     non-binary inbound state, mirroring the switch. read-path
-     filtering drops stay silent.
-   - DONE. src/pn-zigbee-relay-command.c -- WARNING when a
-     configured node gets an input with no usable numeric value
-     (upstream-emit bounded). The unconfigured drop stays silent
-     (the red error visual already flags it, and it would repeat on
-     every upstream emit).
+   a. DONE. src/pn-zigbee-source.c rebuild_device_cache -- a WARNING
+      when the bridge/devices payload is not a JSON array (and the
+      prior cache is now kept untouched on that path); plus one
+      aggregated WARNING ("skipped N entries with no usable
+      friendly_name") instead of per-element spam.
+   b. DONE. src/pn-zigbee-switch.c -- WARNING on the unconfigured
+      outbound fallback (user-toggle bounded); INFO on a present-but-
+      non-binary inbound state (e.g. "TOGGLE"). The state==NULL /
+      wrong-topic / unconfigured *read* drops stay silent (see rule).
+   c. DONE. src/pn-zigbee-relay-status.c -- INFO on a present-but-
+      non-binary inbound state, mirroring the switch. read-path
+      filtering drops stay silent.
+   d. DONE. src/pn-zigbee-relay-command.c -- WARNING when a
+      configured node gets an input with no usable numeric value
+      (upstream-emit bounded). The unconfigured drop stays silent
+      (the red error visual already flags it, and it would repeat on
+      every upstream emit).
 
 
 ----------------------------------------------------------------
@@ -82,27 +82,27 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
    PnNode directly and are unaffected (they report their correct
    class_name). Likely surfaced by commit 5fd9ad9, which dropped
    the deprecated pn_node_set_class_name() calls from node init.
-   - Decide whether the palette/inspector should show "Zigbee
-     Switch" (it should). If so, re-assert the per-instance label
-     in pn_zigbee_switch_init (the supported setter), or have the
-     host stop seeding an instance-level override from PnSwitch.
-     Caught by tests/test-zigbee-switch.c (which currently does
-     not assert class_name for this reason).
-   - Update (2026-05-29): the host getter was already fixed for
-     this -- pipnode commit 97acd76 made pn_node_get_class_name()
-     fall back to the class-level PnNodeClass.class_name when there
-     is no per-instance override (lib/pn-node.c:889-898), and
-     deprecated pn_node_set_class_name() for plugin _init() use.
-     That alone does NOT fix us, though: PnSwitch's own
-     pn_switch_init still seeds a per-instance "Switch"
-     (lib/pn-switch.c:462) -- 97acd76 cleaned up pn_mqtt_init but
-     left pn-switch.c -- so the getter finds that non-empty
-     per-instance value and never reaches the new class-level
-     fallback. Decided fix: drop the pn_node_set_class_name (node,
-     "Switch") line at pn-switch.c:462 in pipnode (mirroring the
-     pn_mqtt_init cleanup); then PnZigbeeSwitch inherits "Zigbee
-     Switch" for free. To be done in pipnode later; once landed,
-     enable the class_name assertion in tests/test-zigbee-switch.c.
+   a. Decide whether the palette/inspector should show "Zigbee
+      Switch" (it should). If so, re-assert the per-instance label
+      in pn_zigbee_switch_init (the supported setter), or have the
+      host stop seeding an instance-level override from PnSwitch.
+      Caught by tests/test-zigbee-switch.c (which currently does
+      not assert class_name for this reason).
+   b. Update (2026-05-29): the host getter was already fixed for
+      this -- pipnode commit 97acd76 made pn_node_get_class_name()
+      fall back to the class-level PnNodeClass.class_name when there
+      is no per-instance override (lib/pn-node.c:889-898), and
+      deprecated pn_node_set_class_name() for plugin _init() use.
+      That alone does NOT fix us, though: PnSwitch's own
+      pn_switch_init still seeds a per-instance "Switch"
+      (lib/pn-switch.c:462) -- 97acd76 cleaned up pn_mqtt_init but
+      left pn-switch.c -- so the getter finds that non-empty
+      per-instance value and never reaches the new class-level
+      fallback. Decided fix: drop the pn_node_set_class_name (node,
+      "Switch") line at pn-switch.c:462 in pipnode (mirroring the
+      pn_mqtt_init cleanup); then PnZigbeeSwitch inherits "Zigbee
+      Switch" for free. To be done in pipnode later; once landed,
+      enable the class_name assertion in tests/test-zigbee-switch.c.
 
 
 ----------------------------------------------------------------
@@ -129,11 +129,11 @@ below are behavioral / contract issues.
    switch *only* on the unconfigured fallback path
    (pn-zigbee-switch.c:133-134), so within one node success means
    "always true" when configured but "is-on" when not.
-   - Optionally make the unconfigured fallback also stamp
-     success = TRUE for self-consistency. Low priority -- the
-     unconfigured case is a misconfiguration the warning visual
-     already flags, and success is correct on the path that
-     matters.
+   a. Optionally make the unconfigured fallback also stamp
+      success = TRUE for self-consistency. Low priority -- the
+      unconfigured case is a misconfiguration the warning visual
+      already flags, and success is correct on the path that
+      matters.
 
 5. PnZigbeeSource: malformed/empty bridge/devices is dropped and
    leaves a stale cache.
@@ -142,30 +142,30 @@ below are behavioral / contract issues.
    filter_bridge_devices=TRUE), the device cache is not refreshed,
    and nothing is logged; the node then runs on stale device info
    invisibly. (Deeper than the section-12 logging item for :590.)
-   - Log a warning on the not-an-array / empty case, and consider
-     keeping the previous cache when the new array is empty.
+   a. Log a warning on the not-an-array / empty case, and consider
+      keeping the previous cache when the new array is empty.
 
 6. Boolean Z2M state is silently dropped (switch & relay nodes).
-    src/pn-zigbee-relay-command.c:116-122,
-    src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
-    value/state readers accept only string / int64 / double, so Z2M
-    endpoints that express "state": true as a JSON boolean are
-    ignored. Consistent across the three, so a gap rather than a
-    divergence.
-    - Optionally accept G_TYPE_BOOLEAN for state / value.
+   src/pn-zigbee-relay-command.c:116-122,
+   src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
+   value/state readers accept only string / int64 / double, so Z2M
+   endpoints that express "state": true as a JSON boolean are
+   ignored. Consistent across the three, so a gap rather than a
+   divergence.
+   a. Optionally accept G_TYPE_BOOLEAN for state / value.
 
 7. PnZigbeeRelayStatus leaves the live device state topic on its
-    emitted message.
-    src/pn-zigbee-relay-status.c:204-218 -- never calls
-    pn_message_set_topic, unlike relay-command which rewrites it
-    (:166-168). Wiring relay-status to an MQTT Sink that republishes
-    on the inbound topic would echo onto the device's state topic.
-    Latent foot-gun.
-    - Clear the topic on the emitted message, or document why it's
+   emitted message.
+   src/pn-zigbee-relay-status.c:204-218 -- never calls
+   pn_message_set_topic, unlike relay-command which rewrites it
+   (:166-168). Wiring relay-status to an MQTT Sink that republishes
+   on the inbound topic would echo onto the device's state topic.
+   Latent foot-gun.
+   a. Clear the topic on the emitted message, or document why it's
       left intact.
 
 8. Test-coverage gaps (not bugs).
-    - PnZigbeeSource has zero unit tests -- its Z2M filter/inject
+   a. PnZigbeeSource has zero unit tests -- its Z2M filter/inject
       logic (the most complex code in the plugin) is uncovered
       because constructing it auto-connects libmosquitto
       off-thread. Worth an integration test against a throwaway
@@ -201,68 +201,68 @@ handing it to the sink (pn_node_receive_message) is the supported
 publish path; no second mosquitto client to hand-roll.
 
 9. Build editable per-device settings pages from the exposes tree.
-   - Capture live state. In zb_on_message, when the topic is the
-     bare device topic zigbee2mqtt/<friendly_name> (no further '/'),
-     store a deep copy of the payload object in a
-     friendly_name -> JsonObject map on the ctx. This is the
-     current-value source the controls seed from; refresh it on every
-     such publish and, when it is the shown device, push the new
-     values into the live controls.
-   - Resolve the selected device. On row select, look the row id
-     (IEEE) up in ctx->devices to find its object, then its
-     definition.exposes and definition.options arrays. Stash the
-     selected friendly_name on the ctx (needed for the set topic and
-     the state-map lookup).
-   - Clear old pages. Remove any previously-built device pages from
-     the notebook (keep the static "Broker" page), tearing down their
-     per-control bindings, before building the new device's pages.
-     Track the dynamic pages/widgets on the ctx so teardown on
-     re-select and on dialog close is clean.
-   - Walk the exposes tree into pages/sections.
-       * A top-level composite expose (type switch/light/cover/lock/
-         climate/fan, or "composite"/"list") becomes its own page or
-         section; recurse into its `features` array for the rows.
-       * Bare top-level exposes (binary/numeric/enum/text) group under
-         a generic "State" / "Settings" page.
-       * Use pn_device_form_new_tab + _add_section + a GtkGrid of rows,
-         the same house-style helpers the Broker page already uses.
-   - Map each expose to a widget by `type`, honouring the `access`
-     bitmap (1=published, 2=settable, 4=gettable): bit 2 set -> an
-     editable control, otherwise a read-only value row via
-     pn_device_form_attach_label_row.
-       * binary  -> GtkSwitch, mapping value_on/value_off (string
-         "ON"/"OFF" or JSON bool) to active state.
-       * numeric -> PnDeviceSpin (pn_device_spin_new_with_range) seeded
-         with value_min/value_max/value_step; `unit` as a suffix label.
-       * enum    -> PnDeviceCombo filled from the `values` string array.
-       * text    -> GtkEntry / PnInlineEditLabel (pn_inline_edit_label_new).
-       * composite/list -> nested sub-section built by the same walk.
-       * unknown `type` -> read-only row showing the raw JSON, so a
-         newer Z2M expose surfaces rather than vanishing.
-     Resolve each control's JSON key from `property` (and `endpoint`:
-     the key becomes <property>_<endpoint> when present); label from
-     `label`/`name`, tooltip from `description`.
-   - Seed current values. After building, fill every control from the
-     captured device-state object by its resolved property key; leave
-     the "—" placeholder when the value is absent.
-   - Apply / write-back. Give each settable page (or each control) an
-     Apply that collects the changed settable properties into a
-     JsonObject, builds a PnMessage with topic
-     zigbee2mqtt/<friendly_name>/set and data.payload = that object,
-     and hands it to the hidden PnMqttSink via
-     pn_node_receive_message. Create/destroy the sink alongside the
-     source in zb_start_source / zb_drop_source (same broker-profile).
-   - Reflect confirmed state. Z2M re-publishes the device's full state
-     on zigbee2mqtt/<friendly_name> after a successful set, which the
-     live-state capture already receives -- repaint the shown controls
-     from it so the UI shows what the device accepted (a value the
-     device clamped/rejected shows through), not what was typed.
-   - Lifecycle / edge cases. A device with no definition (the
-     Coordinator) or empty exposes gets an identity-only read-only
-     page; switching devices or pressing Reload rebuilds cleanly;
-     closing the dialog frees the state map and the sink. Surface
-     definition.options (retain / transition / legacy) on a separate
-     "Options" page from the exposes, if shown at all.
-   - Optional later. Group exposes by `endpoint` into per-endpoint
-     pages for multi-gang devices; expose numeric `presets`; a
-     per-control "get" refresh for access bit 4.
+   a. Capture live state. In zb_on_message, when the topic is the
+      bare device topic zigbee2mqtt/<friendly_name> (no further '/'),
+      store a deep copy of the payload object in a
+      friendly_name -> JsonObject map on the ctx. This is the
+      current-value source the controls seed from; refresh it on every
+      such publish and, when it is the shown device, push the new
+      values into the live controls.
+   b. Resolve the selected device. On row select, look the row id
+      (IEEE) up in ctx->devices to find its object, then its
+      definition.exposes and definition.options arrays. Stash the
+      selected friendly_name on the ctx (needed for the set topic and
+      the state-map lookup).
+   c. Clear old pages. Remove any previously-built device pages from
+      the notebook (keep the static "Broker" page), tearing down their
+      per-control bindings, before building the new device's pages.
+      Track the dynamic pages/widgets on the ctx so teardown on
+      re-select and on dialog close is clean.
+   d. Walk the exposes tree into pages/sections.
+      * A top-level composite expose (type switch/light/cover/lock/
+        climate/fan, or "composite"/"list") becomes its own page or
+        section; recurse into its `features` array for the rows.
+      * Bare top-level exposes (binary/numeric/enum/text) group under
+        a generic "State" / "Settings" page.
+      * Use pn_device_form_new_tab + _add_section + a GtkGrid of rows,
+        the same house-style helpers the Broker page already uses.
+   e. Map each expose to a widget by `type`, honouring the `access`
+      bitmap (1=published, 2=settable, 4=gettable): bit 2 set -> an
+      editable control, otherwise a read-only value row via
+      pn_device_form_attach_label_row.
+      * binary  -> GtkSwitch, mapping value_on/value_off (string
+        "ON"/"OFF" or JSON bool) to active state.
+      * numeric -> PnDeviceSpin (pn_device_spin_new_with_range) seeded
+        with value_min/value_max/value_step; `unit` as a suffix label.
+      * enum    -> PnDeviceCombo filled from the `values` string array.
+      * text    -> GtkEntry / PnInlineEditLabel (pn_inline_edit_label_new).
+      * composite/list -> nested sub-section built by the same walk.
+      * unknown `type` -> read-only row showing the raw JSON, so a
+        newer Z2M expose surfaces rather than vanishing.
+      Resolve each control's JSON key from `property` (and `endpoint`:
+      the key becomes <property>_<endpoint> when present); label from
+      `label`/`name`, tooltip from `description`.
+   f. Seed current values. After building, fill every control from the
+      captured device-state object by its resolved property key; leave
+      the "—" placeholder when the value is absent.
+   g. Apply / write-back. Give each settable page (or each control) an
+      Apply that collects the changed settable properties into a
+      JsonObject, builds a PnMessage with topic
+      zigbee2mqtt/<friendly_name>/set and data.payload = that object,
+      and hands it to the hidden PnMqttSink via
+      pn_node_receive_message. Create/destroy the sink alongside the
+      source in zb_start_source / zb_drop_source (same broker-profile).
+   h. Reflect confirmed state. Z2M re-publishes the device's full state
+      on zigbee2mqtt/<friendly_name> after a successful set, which the
+      live-state capture already receives -- repaint the shown controls
+      from it so the UI shows what the device accepted (a value the
+      device clamped/rejected shows through), not what was typed.
+   i. Lifecycle / edge cases. A device with no definition (the
+      Coordinator) or empty exposes gets an identity-only read-only
+      page; switching devices or pressing Reload rebuilds cleanly;
+      closing the dialog frees the state map and the sink. Surface
+      definition.options (retain / transition / legacy) on a separate
+      "Options" page from the exposes, if shown at all.
+   j. Optional later. Group exposes by `endpoint` into per-endpoint
+      pages for multi-gang devices; expose numeric `presets`; a
+      per-control "get" refresh for access bit 4.
