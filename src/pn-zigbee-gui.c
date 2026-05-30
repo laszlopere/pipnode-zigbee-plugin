@@ -674,6 +674,16 @@ zb_json_to_display (JsonNode *node)
     return json_to_string (node, FALSE);   /* object / array -> compact */
 }
 
+/* The @key member of @obj as a display string (owned), or NULL when the
+ * member is absent.  Used for the read-only identity / options rows. */
+static gchar *
+zb_peek_display (JsonObject *obj, const gchar *key)
+{
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return NULL;
+    return zb_json_to_display (json_object_get_member (obj, key));
+}
+
 /* A JSON scalar as a double, for seeding a numeric spin.  TRUE on
  * success. */
 static gboolean
@@ -1125,14 +1135,150 @@ zb_build_composite_page (ZbDevCtx *ctx, JsonObject *exp)
     gtk_widget_show_all (tab);
 }
 
-/* (d) Walk the whole exposes tree of the selected device into pages:
+/* Append a read-only "key | value" row to @grid for @value (owned, freed
+ * here), or nothing when @value is NULL -- the identity / options rows. */
+static void
+zb_add_readonly_row (GtkGrid *grid, gint *row, const gchar *key, gchar *value)
+{
+    GtkLabel *label;
+
+    if (value == NULL)
+        return;
+    label = pn_device_form_attach_label_row (grid, (*row)++, key);
+    pn_device_form_set_value (label, value);
+    g_free (value);
+}
+
+/* (i) A read-only identity page for a device with no settings to edit (no
+ * definition -- the Coordinator -- or empty exposes): the addressing /
+ * vendor fields straight off the inventory record, so the device is not a
+ * blank right-hand pane.  Built directly from @dev, not from ctx->state. */
+static void
+zb_build_identity_page (ZbDevCtx *ctx, JsonObject *dev)
+{
+    GtkWidget  *inner;
+    GtkWidget  *tab  = pn_device_form_new_tab (&inner);
+    GtkWidget  *grid = gtk_grid_new ();
+    JsonObject *def  = NULL;
+    JsonNode   *dn;
+    gint        row  = 0;
+
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Friendly name",
+                         zb_peek_display (dev, "friendly_name"));
+    zb_add_readonly_row (GTK_GRID (grid), &row, "IEEE address",
+                         zb_peek_display (dev, "ieee_address"));
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Type",
+                         zb_peek_display (dev, "type"));
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Network address",
+                         zb_peek_display (dev, "network_address"));
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Power source",
+                         zb_peek_display (dev, "power_source"));
+
+    if (json_object_has_member (dev, "definition"))
+    {
+        dn = json_object_get_member (dev, "definition");
+        if (dn != NULL && JSON_NODE_HOLDS_OBJECT (dn))
+            def = json_node_get_object (dn);
+    }
+    if (def != NULL)
+    {
+        zb_add_readonly_row (GTK_GRID (grid), &row, "Vendor",
+                             zb_peek_display (def, "vendor"));
+        zb_add_readonly_row (GTK_GRID (grid), &row, "Model",
+                             zb_peek_display (def, "model"));
+        zb_add_readonly_row (GTK_GRID (grid), &row, "Description",
+                             zb_peek_display (def, "description"));
+    }
+
+    pn_device_form_add_section (inner, "Device", grid);
+    pn_device_dialog_append_page (ctx->shell, tab, "Info");
+    g_ptr_array_add (ctx->device_pages, tab);
+    gtk_widget_show_all (tab);
+}
+
+/* (i) A read-only "Options" page surfacing definition.options (the Z2M
+ * device options -- retain / transition / state_action / legacy …).  Shown
+ * read-only on purpose: these are configured through Z2M's bridge request
+ * API, not the "<name>/set" path the editable pages publish to, so they are
+ * surfaced (label + description tooltip + default value) without an Apply
+ * that would write to the wrong place.  Composite option groups are rare;
+ * one would render as a single value row rather than recursing. */
+static void
+zb_build_options_page (ZbDevCtx *ctx, JsonArray *options)
+{
+    GtkWidget *inner;
+    GtkWidget *tab;
+    GtkWidget *grid;
+    guint      n, i;
+    gint       row = 0;
+
+    n = json_array_get_length (options);
+    if (n == 0)
+        return;
+
+    tab  = pn_device_form_new_tab (&inner);
+    grid = gtk_grid_new ();
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+
+    for (i = 0; i < n; i++)
+    {
+        JsonNode    *elem = json_array_get_element (options, i);
+        JsonObject  *opt;
+        const gchar *desc;
+        GtkLabel    *label;
+        gchar       *value;
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        opt   = json_node_get_object (elem);
+        label = pn_device_form_attach_label_row (GTK_GRID (grid), row++,
+                                                 zb_expose_label (opt));
+        desc  = zb_peek_string (opt, "description");
+        if (desc != NULL)
+            gtk_widget_set_tooltip_text (GTK_WIDGET (label), desc);
+        /* No live source for an option's current value; show its default. */
+        value = zb_peek_display (opt, "value_default");
+        if (value != NULL)
+        {
+            pn_device_form_set_value (label, value);
+            g_free (value);
+        }
+    }
+
+    if (row > 0)
+    {
+        pn_device_form_add_section (inner, "Options", grid);
+        pn_device_dialog_append_page (ctx->shell, tab, "Options");
+        g_ptr_array_add (ctx->device_pages, tab);
+        gtk_widget_show_all (tab);
+    }
+    else
+    {
+        g_object_ref_sink (tab);
+        gtk_widget_destroy (tab);
+        g_object_unref (tab);
+        g_object_ref_sink (grid);
+        gtk_widget_destroy (grid);
+        g_object_unref (grid);
+    }
+}
+
+/* (d, i) Walk the whole exposes tree of the selected device into pages:
  * each top-level composite/typed expose gets its own page; the bare
  * top-level exposes (binary/numeric/enum/text/…) collect under a single
- * "Settings" page.  Then jump to the first device page. */
+ * "Settings" page.  A device with no editable exposes falls back to a
+ * read-only identity page, and definition.options (when present) gets its
+ * own read-only "Options" page.  Then jump to the first device page. */
 static void
-zb_build_device_pages (ZbDevCtx *ctx, JsonArray *exposes)
+zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
+                       JsonArray *exposes, JsonArray *options)
 {
     GPtrArray *bare = g_ptr_array_new ();
+    guint      pages_before = ctx->device_pages->len;
     guint      n, i;
 
     if (exposes != NULL)
@@ -1174,6 +1320,16 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonArray *exposes)
         gtk_widget_show_all (tab);
     }
     g_ptr_array_unref (bare);
+
+    /* (i) No editable expose produced a page (no definition / empty
+     * exposes) -- fall back to a read-only identity page so the pane is
+     * not blank. */
+    if (ctx->device_pages->len == pages_before)
+        zb_build_identity_page (ctx, dev);
+
+    /* (i) Surface the device's Z2M options on their own read-only page. */
+    if (options != NULL)
+        zb_build_options_page (ctx, options);
 
     /* The static "Broker" page is index 0; show the first device page. */
     if (ctx->device_pages->len > 0)
@@ -1318,12 +1474,11 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
     exposes = zb_definition_array (dev, "exposes");
     options = zb_definition_array (dev, "options");
 
-    /* (d, e) walk the exposes tree into editable settings pages, then
-     * (f) seed every built control from the captured live state and (g)
-     * snapshot baselines so each page's Apply publishes only changes.
-     * Options still get only the status note below (their own page is
-     * item i). */
-    zb_build_device_pages (ctx, exposes);
+    /* (d, e) walk the exposes tree into editable settings pages (plus the
+     * read-only identity / options pages of item i), then (f) seed every
+     * built control from the captured live state and (g) snapshot baselines
+     * so each page's Apply publishes only changes. */
+    zb_build_device_pages (ctx, dev, exposes, options);
     zb_seed_controls (ctx);
     zb_snapshot_baselines (ctx);
 

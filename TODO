@@ -279,12 +279,20 @@ publish path; no second mosquitto client to hand-roll.
       absent from the payload, and any pending edit on them, are untouched.
       Runs on the main thread (PnMqtt marshals PUBLISHes there), so the
       GTK writes are safe.
-   i. Lifecycle / edge cases. A device with no definition (the
-      Coordinator) or empty exposes gets an identity-only read-only
-      page; switching devices or pressing Reload rebuilds cleanly;
-      closing the dialog frees the state map and the sink. Surface
-      definition.options (retain / transition / legacy) on a separate
-      "Options" page from the exposes, if shown at all.
+   i. Lifecycle / edge cases. DONE (2026-05-30). When the exposes walk
+      builds no page (no definition -- the Coordinator -- or empty
+      exposes), zb_build_identity_page adds a read-only "Info" page with
+      the addressing/vendor fields straight off the inventory record, so
+      the pane is never blank. definition.options gets its own read-only
+      "Options" page (zb_build_options_page) showing each option's
+      label/description/default -- read-only on purpose, since Z2M device
+      options are set through the bridge request API, not the "<name>/set"
+      path the editable pages use, so wiring them to the page Apply would
+      write to the wrong place. Both pages are tracked in ctx->device_pages,
+      so switching devices / pressing Reload tears them down and rebuilds
+      cleanly (zb_clear_device_pages, zb_start_source), and closing frees
+      the state map and the sink (zb_dev_ctx_free -> g_hash_table_unref +
+      zb_drop_source) -- all already in place from a-c/g.
    j. Optional later. Group exposes by `endpoint` into per-endpoint
       pages for multi-gang devices; expose numeric `presets`; a
       per-control "get" refresh for access bit 4.
