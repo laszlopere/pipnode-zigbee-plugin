@@ -1,0 +1,72 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnZigbeeSource",
+      "uuid" : "237ac641-43ea-4387-8c23-bb13fa7790f9",
+      "name" : "Zigbee Source 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 40.0,
+        "y" : 40.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
+        "subscribe-topic" : "zigbee2mqtt/#",
+        "qos" : 0,
+        "filter-logging" : true,
+        "filter-bridge-devices" : true,
+        "filter-bridge-definitions" : true,
+        "filter-bridge-info" : true,
+        "inject-device-info" : false,
+        "inject-device-capabilities" : false
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "13c11cb2-6549-4595-bc23-5a60dfca5ee9",
+      "name" : "Debug Print 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 400.0,
+        "y" : 40.0
+      },
+      "properties" : {
+        "target" : "Debug View",
+        "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnZigbeeWaterLeak",
+      "uuid" : "001849bb-c884-46f1-8161-3f7d9a61a308",
+      "name" : "Leak Sensor",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 220.0,
+        "y" : 40.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c13860befb28ec",
+        "mode" : "Both"
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "237ac641-43ea-4387-8c23-bb13fa7790f9",
+      "target_id" : "001849bb-c884-46f1-8161-3f7d9a61a308"
+    },
+    {
+      "source_id" : "001849bb-c884-46f1-8161-3f7d9a61a308",
+      "target_id" : "13c11cb2-6549-4595-bc23-5a60dfca5ee9"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}
