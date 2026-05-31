@@ -44,6 +44,7 @@
 #include <pn-device-provider.h>
 #include <pn-device-dialog.h>
 #include <pn-device-form.h>
+#include <pn-action-button.h>
 #include <pn-device-combo.h>
 #include <pn-device-spin.h>
 #include <pn-inline-edit-label.h>
@@ -1542,12 +1543,9 @@ zb_add_page_apply (ZbDevCtx *ctx, GtkWidget *inner, GPtrArray *page_controls)
         return;
     }
 
-    apply_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_halign     (apply_box, GTK_ALIGN_END);
-    gtk_widget_set_margin_top (apply_box, 8);
-    apply = gtk_button_new_with_label ("Apply");
+    apply_box = pn_device_form_add_action_bar (inner);
+    apply = pn_action_button_new ("Apply", PN_ACTION_BUTTON_NORMAL);
     gtk_box_pack_start (GTK_BOX (apply_box), apply, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (inner), apply_box, FALSE, FALSE, 0);
 
     g_object_set_data_full (G_OBJECT (apply), ZB_PAGE_CONTROLS_QDATA,
                             page_controls, (GDestroyNotify) g_ptr_array_unref);
@@ -2390,17 +2388,14 @@ zb_build_firmware_section (ZbDevCtx *ctx, GtkWidget *inner, JsonObject *dev)
     gtk_widget_set_no_show_all (ctx->fw_progress, TRUE);
     gtk_box_pack_start (GTK_BOX (col), ctx->fw_progress, FALSE, FALSE, 0);
 
-    /* Install: right-aligned like the page Apply buttons. */
-    btnbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_halign     (btnbox, GTK_ALIGN_END);
-    gtk_widget_set_margin_top (btnbox, 8);
-    ctx->fw_install = gtk_button_new_with_label ("Install update");
-    gtk_style_context_add_class (
-            gtk_widget_get_style_context (ctx->fw_install), "suggested-action");
+    /* Install: right-aligned like the page Apply buttons, blue (suggested)
+     * because it commits the section's action. */
+    btnbox = pn_device_form_add_action_bar (col);
+    ctx->fw_install = pn_action_button_new ("Install update",
+                                            PN_ACTION_BUTTON_SUGGESTED);
     g_signal_connect (ctx->fw_install, "clicked",
                       G_CALLBACK (zb_on_fw_install_clicked), ctx);
     gtk_box_pack_start (GTK_BOX (btnbox), ctx->fw_install, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (col), btnbox, FALSE, FALSE, 0);
 
     zb_add_section_desc (inner, "Firmware",
                          "The firmware running on this device, and whether a "
@@ -2506,9 +2501,8 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
     rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
     gtk_widget_set_margin_top (rmbox, 8);
-    remove = gtk_button_new_with_label ("Remove device\xe2\x80\xa6");
-    gtk_style_context_add_class (gtk_widget_get_style_context (remove),
-                                 "destructive-action");
+    remove = pn_action_button_new ("Remove device\xe2\x80\xa6",
+                                   PN_ACTION_BUTTON_DESTRUCTIVE);
     gtk_widget_set_tooltip_text (remove,
             "Unpair this device and remove it from Zigbee2MQTT.");
     g_signal_connect (remove, "clicked",
@@ -3748,7 +3742,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                                                 "zigbee-herdsman");
 
     /* Connect, right-aligned under the value column, beneath the readout. */
-    apply = gtk_button_new_with_label ("Connect");
+    apply = pn_action_button_new ("Connect", PN_ACTION_BUTTON_NORMAL);
     gtk_widget_set_halign (apply, GTK_ALIGN_END);
     gtk_widget_set_margin_top (apply, 8);
     g_signal_connect (apply, "clicked",
@@ -3771,28 +3765,28 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
      * coordinator.  Its Start button stays insensitive until a broker is
      * applied (zb_start_source enables it; zb_drop_source disables it). */
     {
-        GtkWidget *jgrid = gtk_grid_new ();
-        GtkWidget *jcell;
+        GtkWidget *jbox;
         GtkWidget *start;
         GtkWidget *jspinner;
-        gint       jrow = 0;
 
-        gtk_grid_set_row_spacing    (GTK_GRID (jgrid), 8);
-        gtk_grid_set_column_spacing (GTK_GRID (jgrid), 12);
+        /* A standard blue (suggested) button, right-aligned like the other
+         * sections' committing action -- no redundant "Pairing" key label. */
+        jbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_halign     (jbox, GTK_ALIGN_END);
+        gtk_widget_set_margin_top (jbox, 8);
 
-        jcell = pn_device_form_attach_control_row (GTK_GRID (jgrid), jrow++,
-                                                   "Pairing");
-        start = gtk_button_new_with_label ("Open join window\xe2\x80\xa6");
+        start = pn_action_button_new ("Open join window\xe2\x80\xa6",
+                                      PN_ACTION_BUTTON_SUGGESTED);
         gtk_widget_set_tooltip_text (start,
                 "Let new Zigbee devices join the network for 5 minutes.");
         gtk_widget_set_sensitive (start, FALSE);   /* until a broker applies */
         g_signal_connect (start, "clicked",
                           G_CALLBACK (zb_on_join_clicked), ctx);
-        gtk_box_pack_start (GTK_BOX (jcell), start, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (jbox), start, FALSE, FALSE, 0);
 
         jspinner = gtk_spinner_new ();
         gtk_widget_set_no_show_all (jspinner, TRUE);   /* shown only when open */
-        gtk_box_pack_start (GTK_BOX (jcell), jspinner, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (jbox), jspinner, FALSE, FALSE, 0);
 
         ctx->join_start   = start;
         ctx->join_spinner = jspinner;
@@ -3805,7 +3799,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                              "button). A progress window shows the countdown and "
                              "how many have joined, and lets you stop early. "
                              "This becomes available once a broker is connected "
-                             "above.", jgrid);
+                             "above.", jbox);
     }
 
     pn_device_dialog_append_page (ctx->shell, tab, "Broker");
