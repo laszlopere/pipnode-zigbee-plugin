@@ -937,6 +937,35 @@ zb_json_to_display (JsonNode *node)
     return json_to_string (node, FALSE);   /* object / array -> compact */
 }
 
+
+/* linkquality (LQI) is reported on a 0-255 scale; the bare number means little
+ * to a user, so append a human-readable percentage (255 -> 100%).             */
+static gchar *
+zb_linkquality_display (JsonNode *node)
+{
+    gchar  *raw = zb_json_to_display (node);
+    gint64  lqi;
+
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE (node))
+        return raw;
+
+    if (json_node_get_value_type (node) == G_TYPE_INT64)
+        lqi = json_node_get_int (node);
+    else if (json_node_get_value_type (node) == G_TYPE_DOUBLE)
+        lqi = (gint64) (json_node_get_double (node) + 0.5);
+    else
+        return raw;
+
+    if (lqi >= 0 && lqi <= 255)
+    {
+        gchar *out = g_strdup_printf ("%s (%d%%)", raw,
+                                      (gint) ((lqi * 100 + 127) / 255));
+        g_free (raw);
+        return out;
+    }
+    return raw;
+}
+
 /* The @key member of @obj as a display string (owned), or NULL when the
  * member is absent.  Used for the read-only identity / options rows. */
 static gchar *
@@ -1087,7 +1116,9 @@ zb_seed_control_node (ZbControl *c, JsonNode *v)
             }
             else
             {
-                gchar *s = zb_json_to_display (v);
+                gchar *s = (g_strcmp0 (c->key, "linkquality") == 0)
+                           ? zb_linkquality_display (v)
+                           : zb_json_to_display (v);
                 pn_device_form_set_value (GTK_LABEL (c->widget), s);
                 g_free (s);
             }
