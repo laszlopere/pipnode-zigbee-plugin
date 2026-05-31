@@ -205,6 +205,9 @@ typedef struct
      * height.  info_widgets holds those rows' key+value widgets (borrowed) so
      * zb_refresh_broker_info can toggle the block as a unit. */
     GtkLabel        *conn_status;
+    GtkWidget       *connect_btn;       /* "Connect"/"Disconnect" toggle     */
+    gboolean         connected;         /* a publish has been seen this session */
+    gulong           combo_handler;     /* broker_combo "changed" id          */
     GPtrArray       *info_widgets;
     GtkLabel        *info_broker;       /* config.mqtt.server (broker URL)   */
     GtkLabel        *info_protocol;     /* config.mqtt.version -> 3.1/3.1.1/5 */
@@ -835,23 +838,52 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
 /*  Apply                                                              */
 /* ------------------------------------------------------------------ */
 
-/* (Re)connect the hidden source to the broker currently selected in the
- * combo, from a clean slate: drop any previous session, zero the counter
- * and the device list, then spin up a fresh source.  Shared by the Apply
- * button and the list pane's Reload (the retained bridge/devices inventory
- * re-arrives on reconnect, so Reload genuinely refreshes the list). */
+/* Point the device-list pane's wording at the current connection state.  The
+ * pane has only two empty pages -- a pre-scan page (shown on first open) and
+ * an empty-result page -- and once a session has populated the list,
+ * set_device_rows(NULL) can only fall back to the empty-result page.  So we
+ * repaint that page to match: the pre-scan "pick a broker" message while
+ * disconnected, the "is Zigbee2MQTT running?" nag once a session is
+ * (re)connecting and merely awaiting its first bridge/devices.  The pre-scan
+ * page keeps the disconnected wording throughout. */
 static void
-zb_start_source (ZbDevCtx *ctx)
+zb_set_list_hints (ZbDevCtx *ctx, gboolean connected)
 {
-    const gchar *id;
-    gchar       *label;
+    pn_device_dialog_set_list_hints (
+            ctx->shell,
+            "network-wireless-disabled", "No devices yet.",
+            "Pick a broker and press Connect.",
+            connected ? "dialog-question" : "network-wireless-disabled",
+            connected ? "No devices reported." : "No devices yet.",
+            connected ? "Is Zigbee2MQTT running and publishing bridge/devices?"
+                      : "Pick a broker and press Connect.");
+}
 
+/* Tear the dialog back to its disconnected state: drop the live source and
+ * sink, zero the counter and device list, repaint Status as "Not connected"
+ * (which also flips the action button back to "Connect"), hide the version
+ * readout and forget the per-device pages and state.  @reselect stashes the
+ * currently-open device id in pending_reselect so a follow-on reconnect can
+ * reopen it -- a plain Disconnect passes FALSE and forgets it.  Shared by
+ * zb_start_source (reconnect, reselect) and the Disconnect path (forget). */
+static void
+zb_reset_to_disconnected (ZbDevCtx *ctx, gboolean reselect)
+{
     zb_drop_source (ctx);
     ctx->count = 0;
     pn_device_form_set_value (ctx->count_label, "0");
     g_clear_pointer (&ctx->devices, json_node_unref);
     g_clear_pointer (&ctx->config, json_node_unref);
     g_clear_pointer (&ctx->info, json_node_unref);
+
+    /* On a genuine Disconnect, repaint the empty-result page (which the
+     * set_device_rows(NULL) below forces) with the pre-scan "pick a broker"
+     * wording so the list returns to its disconnected look rather than nagging
+     * about Zigbee2MQTT.  A reconnect (reselect) keeps the connected wording --
+     * zb_start_source restores it explicitly. */
+    if (!reselect)
+        zb_set_list_hints (ctx, FALSE);
+
     pn_device_dialog_set_device_rows (ctx->shell, NULL);   /* clear list */
 
     /* Back to square one: "Not connected", and hide the version rows until a
@@ -861,15 +893,35 @@ zb_start_source (ZbDevCtx *ctx)
 
     /* The inventory and live state replay on reconnect; drop the stale
      * selection, its pages and the per-device state so nothing carries
-     * over from the previous broker/session.  Remember which device was
-     * open first, so once the replayed inventory lands it is re-selected --
-     * rebuilding its pages and re-firing the gettable /get so its values
-     * (an enum the device had not yet answered, say) refill themselves. */
+     * over from the previous broker/session.  On a reconnect, remember which
+     * device was open first, so once the replayed inventory lands it is
+     * re-selected -- rebuilding its pages and re-firing the gettable /get so
+     * its values (an enum the device had not yet answered, say) refill
+     * themselves.  On a plain Disconnect, forget it. */
     g_free (ctx->pending_reselect);
-    ctx->pending_reselect = g_steal_pointer (&ctx->selected_id);
+    if (reselect)
+        ctx->pending_reselect = g_steal_pointer (&ctx->selected_id);
+    else
+    {
+        ctx->pending_reselect = NULL;
+        g_clear_pointer (&ctx->selected_id, g_free);
+    }
     g_clear_pointer (&ctx->selected_name, g_free);
     g_hash_table_remove_all (ctx->state);
     zb_clear_device_pages (ctx);
+}
+
+static void
+zb_start_source (ZbDevCtx *ctx)
+{
+    const gchar *id;
+    gchar       *label;
+
+    /* Restore the connected wording a prior Disconnect may have swapped onto
+     * the empty-result page, then reset (keeping the open device for reselect)
+     * and connect. */
+    zb_set_list_hints (ctx, TRUE);
+    zb_reset_to_disconnected (ctx, TRUE);
 
     /* The active id is the profile id; "" follows the primary broker.
      * active-id is a GtkComboBox property (not GtkComboBoxText). */
@@ -914,8 +966,37 @@ zb_start_source (ZbDevCtx *ctx)
 static void
 zb_on_apply_clicked (GtkButton *button, gpointer user_data)
 {
+    ZbDevCtx *ctx = user_data;
+
     (void) button;
-    zb_start_source (user_data);
+
+    /* The button toggles: once a publish has proved the link up it offers to
+     * tear the session down; otherwise it (re)starts one. */
+    if (ctx->connected)
+    {
+        zb_reset_to_disconnected (ctx, FALSE);
+        pn_device_dialog_set_status (ctx->shell, "Disconnected.");
+    }
+    else
+        zb_start_source (ctx);
+}
+
+/* The user picked a different broker.  Any live session belongs to the old
+ * profile, so drop it and return the dialog to its disconnected state; the
+ * next Connect uses the new selection.  A no-op while no session is running
+ * (including the programmatic selection made as the combo is populated). */
+static void
+zb_on_broker_changed (GtkComboBox *combo, gpointer user_data)
+{
+    ZbDevCtx *ctx = user_data;
+
+    (void) combo;
+
+    if (ctx->source == NULL)
+        return;
+
+    zb_reset_to_disconnected (ctx, FALSE);
+    pn_device_dialog_set_status (ctx->shell, "Disconnected.");
 }
 
 /* List-pane Reload (right-click): reconnect so the retained inventory is
@@ -3571,6 +3652,13 @@ zb_set_connected (ZbDevCtx *ctx, gboolean connected)
         connected
             ? "<span foreground=\"#2ecc71\">\xe2\x97\x8f</span> Connected"
             : "<span foreground=\"#9e9e9e\">\xe2\x97\x8f</span> Not connected");
+
+    /* Mirror the state onto the action button: once data is flowing it offers
+     * to tear the session down; otherwise it offers to start one. */
+    ctx->connected = connected;
+    if (ctx->connect_btn != NULL)
+        gtk_button_set_label (GTK_BUTTON (ctx->connect_btn),
+                              connected ? "Disconnect" : "Connect");
 }
 
 /* Attach a version row to @grid at @row, sharing its key/value columns with the
@@ -3723,6 +3811,13 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
             "mqtt-broker profile.");
     gtk_box_pack_start (GTK_BOX (cell), combo, TRUE, TRUE, 0);
 
+    /* Switching brokers abandons any live session (see zb_on_broker_changed).
+     * The programmatic set_active during zb_populate_brokers trips this too,
+     * but it no-ops while no source is running. */
+    ctx->combo_handler = g_signal_connect (combo, "changed",
+                                           G_CALLBACK (zb_on_broker_changed),
+                                           ctx);
+
     /* "Status" | connection indicator (grey until the first publish). */
     ctx->conn_status =
         pn_device_form_attach_label_row (GTK_GRID (grid), row++, "Status");
@@ -3750,6 +3845,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
 
     /* Connect, right-aligned under the value column, beneath the readout. */
     apply = pn_action_button_new ("Connect", PN_ACTION_BUTTON_NORMAL);
+    ctx->connect_btn = apply;
     gtk_widget_set_halign (apply, GTK_ALIGN_END);
     gtk_widget_set_margin_top (apply, 8);
     g_signal_connect (apply, "clicked",
@@ -3815,14 +3911,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
      * scan -- devices arrive over MQTT once a broker is applied); the
      * list is driven by bridge/devices publishes via set_device_rows.
      * Reload (right-click) reconnects so the retained inventory replays. */
-    pn_device_dialog_set_list_hints (
-            ctx->shell,
-            "network-wireless-disabled",
-            "No devices yet.",
-            "Pick a broker and press Connect.",
-            "dialog-question",
-            "No devices reported.",
-            "Is Zigbee2MQTT running and publishing bridge/devices?");
+    zb_set_list_hints (ctx, TRUE);
     pn_device_dialog_set_scan_callback (ctx->shell, zb_on_scan, ctx);
     pn_device_dialog_set_selected_callback (ctx->shell,
                                             zb_on_device_selected, ctx);
