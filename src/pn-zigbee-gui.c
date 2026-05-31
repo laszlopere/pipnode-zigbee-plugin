@@ -2497,18 +2497,22 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
     /* Firmware: version + OTA, for devices that report it. */
     zb_build_firmware_section (ctx, inner, dev);
 
-    /* Remove: its own foldable section, the button right-aligned like Apply. */
-    rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
-    gtk_widget_set_margin_top (rmbox, 8);
-    remove = pn_action_button_new ("Remove device\xe2\x80\xa6",
-                                   PN_ACTION_BUTTON_DESTRUCTIVE);
-    gtk_widget_set_tooltip_text (remove,
-            "Unpair this device and remove it from Zigbee2MQTT.");
-    g_signal_connect (remove, "clicked",
-                      G_CALLBACK (zb_on_remove_clicked), ctx);
-    gtk_box_pack_start (GTK_BOX (rmbox), remove, FALSE, FALSE, 0);
-    zb_add_section_desc (inner, "Remove device",
+    /* Remove: its own foldable section, the button right-aligned like Apply.
+     * The Coordinator is the hub itself, not a paired device -- there is
+     * nothing to unpair, so it gets no Remove section. */
+    if (g_strcmp0 (zb_peek_string (dev, "type"), "Coordinator") != 0)
+    {
+        rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
+        gtk_widget_set_margin_top (rmbox, 8);
+        remove = pn_action_button_new ("Remove device\xe2\x80\xa6",
+                                       PN_ACTION_BUTTON_DESTRUCTIVE);
+        gtk_widget_set_tooltip_text (remove,
+                "Unpair this device and remove it from Zigbee2MQTT.");
+        g_signal_connect (remove, "clicked",
+                          G_CALLBACK (zb_on_remove_clicked), ctx);
+        gtk_box_pack_start (GTK_BOX (rmbox), remove, FALSE, FALSE, 0);
+        zb_add_section_desc (inner, "Remove device",
                          "Removing a device disconnects it from your wireless "
                          "network and erases it from the system. Do this if you "
                          "no longer use it, or want to set it up elsewhere. "
@@ -2517,6 +2521,7 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
                          "pressing a button on the device. If it is broken or "
                          "already gone, the confirmation box offers a \"force\" "
                          "option that removes it anyway.", rmbox);
+    }
 
     pn_device_dialog_append_page (ctx->shell, tab, "Device");
     g_ptr_array_add (ctx->device_pages, tab);
