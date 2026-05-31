@@ -1854,25 +1854,12 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
 /* Add @grid to @inner as an expander section titled @title, with a short dim
  * @desc line below the title (inside the section body, above the grid) -- the
  * "few words under each foldable" the dialog uses to explain every section.
- * @desc may be NULL.  Sinks @grid (via pn_device_form_add_section). */
+ * Sinks @grid (via pn_device_form_add_section, which renders @desc itself). */
 static void
 zb_add_section_desc (GtkWidget *inner, const gchar *title, const gchar *desc,
                      GtkWidget *grid)
 {
-    GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-
-    if (desc != NULL)
-    {
-        GtkWidget       *d  = gtk_label_new (desc);
-        GtkStyleContext *sc = gtk_widget_get_style_context (d);
-
-        gtk_label_set_xalign     (GTK_LABEL (d), 0.0);
-        gtk_label_set_line_wrap  (GTK_LABEL (d), TRUE);
-        gtk_style_context_add_class (sc, "dim-label");
-        gtk_box_pack_start (GTK_BOX (box), d, FALSE, FALSE, 0);
-    }
-    gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
-    pn_device_form_add_section (inner, title, box);   /* sinks box (+ grid) */
+    pn_device_form_add_section (inner, title, desc, grid);
 }
 
 /* Append a read-only "key | value" row to @grid for @value (owned, freed
