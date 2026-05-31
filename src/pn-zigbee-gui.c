@@ -3943,7 +3943,7 @@ pn_plugin_gui_init (PnNodeFactory *factory)
 
     /* "network-wireless" reads as "talk to a radio device" and ships
      * with every common icon theme -- the same icon Meshtastic uses. */
-    pn_device_provider_register ("zigbee", "Zigbee", "network-wireless",
+    pn_device_provider_register ("zigbee", "Zigbee Devices", "network-wireless",
                                  zb_dialog_present, NULL, NULL);
 
     return &info;
