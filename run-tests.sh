@@ -65,23 +65,16 @@ cc="${CC:-cc}"
 # Each test binary = its own .c + the harness + the single node source it
 # exercises.  Keep this table in sync when a node is added.
 #
-# PnZigbeeSource is deliberately absent: it subclasses PnMqtt, and merely
-# constructing one resolves the user's saved broker profile and lets
-# libmosquitto's background thread auto-connect to the broker -- real
-# network traffic that runs off its own thread, not the GLib main loop, so
-# it cannot be suppressed just by not pumping a loop.  Unit-testing it
-# would need an interposed (stubbed) libmosquitto; its Z2M filter/inject
-# logic also only runs on the network thread, so it belongs in an
-# integration test with a throwaway broker, not here.
+# test-zigbee-source drives PnZigbeeSource's accept_topic / process_message
+# vfuncs directly (PN_MQTT_GET_CLASS), with no main loop.  PnZigbeeSource
+# subclasses PnMqtt, but the host debounces the connect onto a main-loop
+# idle (pn-mqtt.c's schedule_restart -> g_idle_add), so a test that never
+# pumps a loop opens no socket -- merely constructing one is network-free.
 #
-# NOTE (2026-05-29): tests/test-zigbee-source.c is written and complete
-# (69 checks) and drives the accept_topic / process_message vfuncs directly,
-# with no main loop.  It relies on the host's *source-tree* pn-mqtt.c, which
-# debounces the connect onto a main-loop idle (so not pumping a loop = no
-# network).  The currently INSTALLED pipnode-core still connects
-# synchronously from construction, so wiring the test in here would hit the
-# live broker.  Re-enable the row below once an updated pipnode-core (with
-# the idle-debounced connect) is installed -- verified with:
+# This was blocked for a while on an older INSTALLED pipnode-core that
+# connected SYNCHRONOUSLY from construction (it would hit the live broker).
+# Resolved 2026-05-31: the installed pipnode-core now has the idle-debounced
+# connect.  Re-verify network-free after a host upgrade with:
 #   strace -f -e trace=network <built test>  # must show no connect() to :1883
 #
 #   <test-basename>            <node source under src/>
@@ -92,7 +85,7 @@ tests_table=(
     "test-zigbee-water-leak     pn-zigbee-water-leak.c"
     "test-zigbee-switch         pn-zigbee-switch.c"
     "test-zigbee-permit-join    pn-zigbee-permit-join.c"
-    # "test-zigbee-source         pn-zigbee-source.c"   # blocked: see NOTE above
+    "test-zigbee-source         pn-zigbee-source.c"
 )
 
 selected () {

@@ -102,14 +102,6 @@ below are behavioral / contract issues.
     5.1 Clear the topic on the emitted message, or document why it's
         left intact.
 
-(6) Test-coverage gaps (not bugs).
-    6.1 PnZigbeeSource has zero unit tests -- its Z2M filter/inject
-        logic (the most complex code in the plugin) is uncovered
-        because constructing it auto-connects libmosquitto
-        off-thread. Worth an integration test against a throwaway
-        broker.
-
-
 ----------------------------------------------------------------
  Devices dialog: Connect/Disconnect toggle review findings
  (2026-05-31)
@@ -123,8 +115,8 @@ guard correctly no-ops during programmatic populate). The items
 below are behavioral / contract issues the new disconnect path made
 reachable, plus reuse cleanups.
 
-(7) Behavioral issues from the toggle.
-    7.1 Open join (pairing) window is left dangling on Disconnect /
+(6) Behavioral issues from the toggle.
+    6.1 Open join (pairing) window is left dangling on Disconnect /
         broker-change. zb_reset_to_disconnected -> zb_drop_source
         clears ctx->sink but never calls zb_join_finish, so the modal
         countdown stays up, zb_join_tick -> zb_join_publish silently
@@ -135,7 +127,7 @@ reachable, plus reuse cleanups.
         priority fix). Fix: call zb_join_finish (ctx, TRUE) in the
         teardown path BEFORE g_clear_object (&ctx->sink) so the close
         actually goes out; zb_join_finish is idempotent and ctx-safe.
-    7.2 A connected-but-silent broker cannot be disconnected via the
+    6.2 A connected-but-silent broker cannot be disconnected via the
         button. ctx->connected is set TRUE only on the first publish
         (zb_on_message, count==1), but zb_on_apply_clicked branches on
         it: if the broker connects while Z2M never publishes (Z2M
@@ -146,24 +138,24 @@ reachable, plus reuse cleanups.
         existence (ctx->source != NULL), keeping ctx->connected only
         for the green Status bullet. zb_on_broker_changed already keys
         on ctx->source != NULL; align the button with it.
-    7.3 Unguarded json_node_get_string at zb_build_action_row (~:1751)
+    6.3 Unguarded json_node_get_string at zb_build_action_row (~:1751)
         on values[0] with no JSON_NODE_HOLDS_VALUE / string-type check
         -- a non-string future payload logs a g_critical. Every other
         consumer routes through the type-safe zb_json_to_display.
         Harmless today (Z2M action values are always strings). Fix:
         guard the type or reuse zb_json_to_display.
-    7.4 Reuse / simplification cleanups (no behavior change):
-        7.4.1 8 near-identical "if (ctx->sink == NULL) { set_status
+    6.4 Reuse / simplification cleanups (no behavior change):
+        6.4.1 8 near-identical "if (ctx->sink == NULL) { set_status
               ("Connect to a broker before <verb>."); return; }" guards
               -> one zb_require_sink (ctx, "writing") helper.
-        7.4.2 The ref_sink/destroy/unref "discard unparented widget"
+        6.4.2 The ref_sink/destroy/unref "discard unparented widget"
               triple is open-coded at 5 sites that could route through
               the existing zb_discard_grid (rename to zb_discard_widget).
-        7.4.3 The dim "unit suffix" label block is duplicated verbatim
+        6.4.3 The dim "unit suffix" label block is duplicated verbatim
               in zb_build_expose_row and zb_add_int_control.
-        7.4.4 Minor: grid row/col spacing 8/12 restated ~8x; status
+        6.4.4 Minor: grid row/col spacing 8/12 restated ~8x; status
               colors #2ecc71 / #9e9e9e inline despite the file otherwise
               #define-ing its constants.
-        7.4.5 Stale comment (~:3948) claims a "nested main loop in
+        6.4.5 Stale comment (~:3948) claims a "nested main loop in
               zb_on_join_clicked" that no longer exists (the join flow
               was rewritten to be non-nested).
