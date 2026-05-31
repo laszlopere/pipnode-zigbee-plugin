@@ -218,13 +218,7 @@ test_visual_state (void)
     CHECK (pn_node_get_has_input (node));
     CHECK (pn_node_get_has_output (node));
     CHECK_STR_EQ (pn_node_get_category (node), "Zigbee");
-
-    /* NOTE: class_name is intentionally NOT asserted here.  The class
-     * pins "Zigbee Switch" (pn-zigbee-switch.c), but pn_node_get_class_name()
-     * currently reports "Switch" for an instance: the PnSwitch base seeds
-     * a per-instance class-name label that shadows the subclass class-level
-     * value.  The other (direct-PnNode) nodes are unaffected and DO assert
-     * their class_name.  See TODO.md -- this discrepancy is tracked there. */
+    CHECK_STR_EQ (pn_node_get_class_name (node), "Zigbee Switch");
 
     g_object_unref (node);
 }

@@ -9,10 +9,22 @@ N.2, ... (and deeper levels N.1.1, N.1.2, ...).
 
 ----------------------------------------------------------------
  PnZigbeeSwitch reports class_name "Switch" instead of
- "Zigbee Switch"
+ "Zigbee Switch"  [DONE 2026-05-31]
 ----------------------------------------------------------------
 
-(1) pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
+(1) DONE (2026-05-31): fixed in pipnode (commit 5b568f6 -- dropped
+    the per-instance pn_node_set_class_name (node, "Switch") seed in
+    pn_switch_init, so PnZigbeeSwitch now inherits "Zigbee Switch"
+    via the class-level fallback). pipnode rebuilt + installed; the
+    class_name assertion is now enabled and passing in
+    tests/test-zigbee-switch.c (visual_state, 8 checks). Same commit
+    also cleaned up PnMqttSink, so PnZigbeeSink's deprecated
+    pn_node_set_class_name re-stamp in pn_zigbee_sink_init was dropped
+    too (it now relies on the class-level fallback); guarded by the new
+    tests/test-zigbee-sink.c (metadata, 5 checks). Original analysis
+    kept below for reference.
+
+    pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
     Switch", but pn_node_get_class_name() on an instance returns
     "Switch". The PnSwitch base seeds a *per-instance* class-name
     label (the legacy override path), and the instance value shadows

@@ -62,12 +62,11 @@ pn_zigbee_sink_init (PnZigbeeSink *self)
     pn_node_set_icon  (PN_NODE (self), PN_ZIGBEE_SINK_ICON);
     pn_node_set_color (PN_NODE (self), &magenta);
 
-    /* The base #PnMqttSink:init stamps the instance class-name to
-     * "MQTT Sink" (it runs before this subclass init), so the node would
-     * otherwise show up as "MQTT Sink" on the worksheet despite the
-     * "Zigbee Sink" class default set in class_init.  Re-stamp it here so
-     * a freshly-dropped node is labelled with the Zigbee identity. */
-    pn_node_set_class_name (PN_NODE (self), "Zigbee Sink");
+    /* class_name is pinned on PnNodeClass.class_name in class_init and
+     * resolved through pn_node_get_class_name()'s class-level fallback, so
+     * the node shows "Zigbee Sink" without a per-instance re-stamp.  The
+     * base #PnMqttSink no longer seeds a per-instance "MQTT Sink" either
+     * (pipnode 5b568f6), so there is nothing left to shadow it. */
 }
 
 PnZigbeeSink *
