@@ -1606,15 +1606,15 @@ zb_on_get_clicked (GtkButton *button, gpointer user_data)
 static GtkWidget *
 zb_make_get_button (ZbDevCtx *ctx, const gchar *key)
 {
-    GtkWidget *btn = gtk_button_new_from_icon_name ("view-refresh",
-                                                    GTK_ICON_SIZE_BUTTON);
+    /* The shared reload affordance (flat "view-refresh", vertically centred)
+     * so the per-value buttons match the firmware and broker ones; we keep
+     * the thin wrapper only to carry an owned copy of @key on the button. */
+    GtkWidget *btn = pn_device_form_reload_button_new (
+            "Refresh this value from the device",
+            G_CALLBACK (zb_on_get_clicked), ctx);
 
-    gtk_button_set_relief (GTK_BUTTON (btn), GTK_RELIEF_NONE);
-    gtk_widget_set_valign  (btn, GTK_ALIGN_CENTER);
-    gtk_widget_set_tooltip_text (btn, "Refresh this value from the device");
     g_object_set_data_full (G_OBJECT (btn), ZB_GET_KEY_QDATA,
                             g_strdup (key), g_free);
-    g_signal_connect (btn, "clicked", G_CALLBACK (zb_on_get_clicked), ctx);
     return btn;
 }
 
@@ -2375,13 +2375,9 @@ zb_build_firmware_section (ZbDevCtx *ctx, GtkWidget *inner, JsonObject *dev)
     status = pn_device_form_attach_label_row (GTK_GRID (grid), status_row,
                                               "Update status");
     ctx->fw_status = GTK_WIDGET (status);
-    ctx->fw_check  = gtk_button_new_from_icon_name ("view-refresh",
-                                                    GTK_ICON_SIZE_BUTTON);
-    gtk_button_set_relief (GTK_BUTTON (ctx->fw_check), GTK_RELIEF_NONE);
-    gtk_widget_set_valign (ctx->fw_check, GTK_ALIGN_CENTER);
-    gtk_widget_set_tooltip_text (ctx->fw_check, "Check for firmware updates");
-    g_signal_connect (ctx->fw_check, "clicked",
-                      G_CALLBACK (zb_on_fw_check_clicked), ctx);
+    ctx->fw_check  = pn_device_form_reload_button_new (
+            "Check for firmware updates",
+            G_CALLBACK (zb_on_fw_check_clicked), ctx);
     gtk_grid_attach (GTK_GRID (grid), ctx->fw_check, 2, status_row, 1, 1);
 
     col = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
