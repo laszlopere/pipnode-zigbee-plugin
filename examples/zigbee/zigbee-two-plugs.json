@@ -12,7 +12,7 @@
         "y" : 60.0
       },
       "properties" : {
-        "on" : false,
+        "on" : true,
         "friendly-name" : "0xa4c138a4c9626802",
         "enforce-on-startup" : true
       }
@@ -64,7 +64,7 @@
       "disabled" : true,
       "position" : {
         "x" : 440.0,
-        "y" : 260.0
+        "y" : 560.0
       },
       "properties" : {
         "target" : "Debug View",
@@ -78,7 +78,7 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 240.0,
-        "y" : 300.0
+        "y" : 600.0
       },
       "properties" : {
         "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c1380f9af0ffff\"}]"
@@ -91,7 +91,7 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 240.0,
-        "y" : 220.0
+        "y" : 520.0
       },
       "properties" : {
         "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c138a4c9626802\"}]"
@@ -122,12 +122,83 @@
       "uuid" : "03307b41-6764-4922-a44b-53f4734694b3",
       "name" : "Debug Print 2",
       "worksheet" : "Worksheet",
+      "disabled" : true,
       "position" : {
         "x" : 240.0,
-        "y" : 380.0
+        "y" : 680.0
       },
       "properties" : {
         "target" : "Standard Error",
+        "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnZigbeeRelayStatus",
+      "uuid" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
+      "name" : "Zigbee Relay Status 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 220.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c138a4c9626802"
+      }
+    },
+    {
+      "type" : "PnZigbeeRelayStatus",
+      "uuid" : "ccc191f7-f7ca-4dcf-b495-6d1ed9b84774",
+      "name" : "Zigbee Relay Status 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c1380f9af0ffff"
+      }
+    },
+    {
+      "type" : "PnLed",
+      "uuid" : "3414111b-1269-4aea-8117-260f4ecbccb9",
+      "name" : "LED 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 480.0,
+        "y" : 220.0
+      },
+      "properties" : {
+        "color" : "rgb(51,217,77)",
+        "hold-ms" : 250,
+        "mode" : "Steady (level)"
+      }
+    },
+    {
+      "type" : "PnLed",
+      "uuid" : "0ea8c6f4-e2d6-440b-83b7-2486c798993b",
+      "name" : "LED 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 480.0,
+        "y" : 300.0
+      },
+      "properties" : {
+        "color" : "rgb(51,217,77)",
+        "hold-ms" : 250,
+        "mode" : "Steady (level)"
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4",
+      "name" : "Debug Print 3",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 480.0,
+        "y" : 360.0
+      },
+      "properties" : {
+        "target" : "Debug View",
         "format" : "JSON"
       }
     }
@@ -150,12 +221,28 @@
       "target_id" : "fa77a2c5-428c-4412-aacb-ee5cafd03536"
     },
     {
-      "source_id" : "fa77a2c5-428c-4412-aacb-ee5cafd03536",
+      "source_id" : "8576afee-a672-49c2-a62e-de5c7233d9b8",
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
     },
     {
-      "source_id" : "8576afee-a672-49c2-a62e-de5c7233d9b8",
-      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "03307b41-6764-4922-a44b-53f4734694b3"
+    },
+    {
+      "source_id" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
+      "target_id" : "3414111b-1269-4aea-8117-260f4ecbccb9"
+    },
+    {
+      "source_id" : "ccc191f7-f7ca-4dcf-b495-6d1ed9b84774",
+      "target_id" : "0ea8c6f4-e2d6-440b-83b7-2486c798993b"
+    },
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f"
+    },
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "ccc191f7-f7ca-4dcf-b495-6d1ed9b84774"
     },
     {
       "source_id" : "c6160241-af67-44a2-8e43-5e5530522080",
@@ -166,8 +253,16 @@
       "target_id" : "730fee09-8f9a-4d9c-a2e4-b9c4c2818dd1"
     },
     {
-      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
-      "target_id" : "03307b41-6764-4922-a44b-53f4734694b3"
+      "source_id" : "fa77a2c5-428c-4412-aacb-ee5cafd03536",
+      "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
+    },
+    {
+      "source_id" : "ccc191f7-f7ca-4dcf-b495-6d1ed9b84774",
+      "target_id" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4"
+    },
+    {
+      "source_id" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
+      "target_id" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4"
     }
   ],
   "sheets" : [
