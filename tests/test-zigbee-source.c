@@ -378,6 +378,40 @@ test_malformed_devices_keeps_cache_and_warns (void)
 }
 
 static void
+test_empty_devices_keeps_cache_and_warns (void)
+{
+    PnZigbeeSource *src = pn_zigbee_source_new ();
+    PnMessage      *empty, *st;
+
+    /* Prime with a good inventory, prove the cache works. */
+    prime_cache (src);
+    st = state_publish ("zigbee2mqtt/lamp");
+    run_process (src, st);
+    CHECK_NOT_NULL (injected_device (st));
+    g_object_unref (st);
+
+    /* An empty-array bridge/devices publish is valid in shape but must not
+     * blank a known-good cache (Z2M re-publishes transiently); keep the
+     * previous inventory and surface exactly one WARNING -- not two, since
+     * retain_bridge_payload stays silent on the same [] (PLUGINS §12,
+     * channel 3). */
+    empty = publish (DEVICES_TOPIC, "[]");
+    CHECK_FALSE (run_process (src, empty));   /* still filtered */
+    g_object_unref (empty);
+    CHECK_INT_EQ (t_log_count (PN_NODE (src), PN_LOG_LEVEL_WARNING), 1);
+    CHECK (t_log_contains (PN_NODE (src), PN_LOG_LEVEL_WARNING,
+                           "empty array"));
+
+    /* The previous inventory survived: lamp still decorates. */
+    st = state_publish ("zigbee2mqtt/lamp");
+    run_process (src, st);
+    CHECK_NOT_NULL (injected_device (st));
+    g_object_unref (st);
+
+    g_object_unref (src);
+}
+
+static void
 test_unusable_entries_aggregated_warning (void)
 {
     PnZigbeeSource *src = pn_zigbee_source_new ();
@@ -482,6 +516,7 @@ main (int argc, char **argv)
     t_add ("inject_disabled_no_block",     test_inject_disabled_adds_no_block);
     t_add ("category_synthesis",           test_category_synthesis);
     t_add ("malformed_devices_keeps_cache", test_malformed_devices_keeps_cache_and_warns);
+    t_add ("empty_devices_keeps_cache",    test_empty_devices_keeps_cache_and_warns);
     t_add ("unusable_entries_warning",     test_unusable_entries_aggregated_warning);
     t_add ("bridge_filters_toggle",        test_bridge_filters_toggle);
     t_add ("non_device_topics_passthrough", test_non_device_topics_pass_through);

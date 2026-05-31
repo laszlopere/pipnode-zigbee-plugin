@@ -720,6 +720,16 @@ retain_bridge_payload (
         return;
     }
 
+    /* An empty inventory array is a valid shape but suspect: keep the
+     * previous snapshot in step with rebuild_device_cache, which preserves
+     * its cache on the same [] (a momentary empty publish must not blank a
+     * good inventory).  Silent here -- rebuild_device_cache is the single
+     * warner for the devices topic; bridge/definitions passes
+     * want_array=FALSE, so it never reaches this branch. */
+    if (want_array &&
+        json_array_get_length (json_node_get_array (payload_node)) == 0)
+        return;
+
     g_clear_pointer (slot, json_node_unref);
     *slot = json_node_copy (payload_node);
 }
@@ -754,9 +764,24 @@ rebuild_device_cache (
     if (arr == NULL)
         return;
 
+    n = json_array_get_length (arr);
+    if (n == 0)
+    {
+        /* A valid but empty inventory.  Z2M republishes bridge/devices on
+         * transient events (its own restart, a single device pairing or
+         * leaving), and a momentary [] must not blank a known-good cache:
+         * keep the previous inventory and warn rather than wiping silently.
+         * A genuine "all devices removed" is rare and self-heals on the
+         * next non-empty publish, since this is a wholesale rebuild
+         * (PLUGINS §12, channel 3). */
+        pn_node_log_warning (PN_NODE (self),
+                             "bridge/devices payload is an empty array; "
+                             "ignoring (device cache unchanged)");
+        return;
+    }
+
     g_hash_table_remove_all (self->device_info);
 
-    n = json_array_get_length (arr);
     for (i = 0; i < n; i++)
     {
         JsonNode           *elem = json_array_get_element (arr, i);

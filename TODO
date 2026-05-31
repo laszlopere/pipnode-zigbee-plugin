@@ -73,33 +73,23 @@ below are behavioral / contract issues.
         already flags, and success is correct on the path that
         matters.
 
-(3) PnZigbeeSource: malformed/empty bridge/devices is dropped and
-    leaves a stale cache.
-    src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
-    momentarily-[] inventory publish is swallowed (default
-    filter_bridge_devices=TRUE), the device cache is not refreshed,
-    and nothing is logged; the node then runs on stale device info
-    invisibly. (Deeper than the section-12 logging for :590.)
-    3.1 Log a warning on the not-an-array / empty case, and consider
-        keeping the previous cache when the new array is empty.
-
-(4) Boolean Z2M state is silently dropped (switch & relay nodes).
+(3) Boolean Z2M state is silently dropped (switch & relay nodes).
     src/pn-zigbee-relay-command.c:116-122,
     src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
     value/state readers accept only string / int64 / double, so Z2M
     endpoints that express "state": true as a JSON boolean are
     ignored. Consistent across the three, so a gap rather than a
     divergence.
-    4.1 Optionally accept G_TYPE_BOOLEAN for state / value.
+    3.1 Optionally accept G_TYPE_BOOLEAN for state / value.
 
-(5) PnZigbeeRelayStatus leaves the live device state topic on its
+(4) PnZigbeeRelayStatus leaves the live device state topic on its
     emitted message.
     src/pn-zigbee-relay-status.c:204-218 -- never calls
     pn_message_set_topic, unlike relay-command which rewrites it
     (:166-168). Wiring relay-status to an MQTT Sink that republishes
     on the inbound topic would echo onto the device's state topic.
     Latent foot-gun.
-    5.1 Clear the topic on the emitted message, or document why it's
+    4.1 Clear the topic on the emitted message, or document why it's
         left intact.
 
 ----------------------------------------------------------------
@@ -115,8 +105,8 @@ guard correctly no-ops during programmatic populate). The items
 below are behavioral / contract issues the new disconnect path made
 reachable, plus reuse cleanups.
 
-(6) Behavioral issues from the toggle.
-    6.1 Open join (pairing) window is left dangling on Disconnect /
+(5) Behavioral issues from the toggle.
+    5.1 Open join (pairing) window is left dangling on Disconnect /
         broker-change. zb_reset_to_disconnected -> zb_drop_source
         clears ctx->sink but never calls zb_join_finish, so the modal
         countdown stays up, zb_join_tick -> zb_join_publish silently
@@ -127,7 +117,7 @@ reachable, plus reuse cleanups.
         priority fix). Fix: call zb_join_finish (ctx, TRUE) in the
         teardown path BEFORE g_clear_object (&ctx->sink) so the close
         actually goes out; zb_join_finish is idempotent and ctx-safe.
-    6.2 A connected-but-silent broker cannot be disconnected via the
+    5.2 A connected-but-silent broker cannot be disconnected via the
         button. ctx->connected is set TRUE only on the first publish
         (zb_on_message, count==1), but zb_on_apply_clicked branches on
         it: if the broker connects while Z2M never publishes (Z2M
@@ -138,24 +128,24 @@ reachable, plus reuse cleanups.
         existence (ctx->source != NULL), keeping ctx->connected only
         for the green Status bullet. zb_on_broker_changed already keys
         on ctx->source != NULL; align the button with it.
-    6.3 Unguarded json_node_get_string at zb_build_action_row (~:1751)
+    5.3 Unguarded json_node_get_string at zb_build_action_row (~:1751)
         on values[0] with no JSON_NODE_HOLDS_VALUE / string-type check
         -- a non-string future payload logs a g_critical. Every other
         consumer routes through the type-safe zb_json_to_display.
         Harmless today (Z2M action values are always strings). Fix:
         guard the type or reuse zb_json_to_display.
-    6.4 Reuse / simplification cleanups (no behavior change):
-        6.4.1 8 near-identical "if (ctx->sink == NULL) { set_status
+    5.4 Reuse / simplification cleanups (no behavior change):
+        5.4.1 8 near-identical "if (ctx->sink == NULL) { set_status
               ("Connect to a broker before <verb>."); return; }" guards
               -> one zb_require_sink (ctx, "writing") helper.
-        6.4.2 The ref_sink/destroy/unref "discard unparented widget"
+        5.4.2 The ref_sink/destroy/unref "discard unparented widget"
               triple is open-coded at 5 sites that could route through
               the existing zb_discard_grid (rename to zb_discard_widget).
-        6.4.3 The dim "unit suffix" label block is duplicated verbatim
+        5.4.3 The dim "unit suffix" label block is duplicated verbatim
               in zb_build_expose_row and zb_add_int_control.
-        6.4.4 Minor: grid row/col spacing 8/12 restated ~8x; status
+        5.4.4 Minor: grid row/col spacing 8/12 restated ~8x; status
               colors #2ecc71 / #9e9e9e inline despite the file otherwise
               #define-ing its constants.
-        6.4.5 Stale comment (~:3948) claims a "nested main loop in
+        5.4.5 Stale comment (~:3948) claims a "nested main loop in
               zb_on_join_clicked" that no longer exists (the join flow
               was rewritten to be non-nested).
