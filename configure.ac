@@ -60,6 +60,13 @@ AS_IF([test -z "$PIPNODE_DATADIR"],
 PIPNODE_EXAMPLESDIR="$PIPNODE_DATADIR/pipnode/examples"
 AC_SUBST([PIPNODE_EXAMPLESDIR])
 
+# Bundled menu icon: installed under this package's own datadir, and its
+# absolute installed path is baked into the GUI module (the Devices-menu
+# provider now takes a full path, not just a themed icon name).  Keep
+# ${datadir} literal so the Makefiles expand it at build time.
+zigbeeicondir="\${datadir}/${PACKAGE_TARNAME}/icons"
+AC_SUBST([zigbeeicondir])
+
 AC_MSG_NOTICE([pipnode plugin will install into $PIPNODE_PLUGINDIR])
 
 AC_CONFIG_FILES([

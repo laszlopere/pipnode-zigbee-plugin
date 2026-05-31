@@ -57,6 +57,12 @@
 
 #include <json-glib/json-glib.h>
 
+/* Absolute path of the installed menu icon, baked in by the build
+ * (src/Makefile.am).  Fall back to a stock themed icon name otherwise. */
+#ifndef ZB_ICON_PATH
+#define ZB_ICON_PATH "network-wireless"
+#endif
+
 /* Qdata keys: the per-dialog state lives on the dialog widget (freed on
  * destroy); the parent window remembers its open dialog so re-activating
  * the menu raises the existing one rather than opening a second. */
@@ -3941,9 +3947,10 @@ pn_plugin_gui_init (PnNodeFactory *factory)
 
     (void) factory;   /* no per-type vfuncs to install; the menu is all */
 
-    /* "network-wireless" reads as "talk to a radio device" and ships
-     * with every common icon theme -- the same icon Meshtastic uses. */
-    pn_device_provider_register ("zigbee", "Zigbee Devices", "network-wireless",
+    /* Our bundled Zigbee glyph, by absolute installed path (ZB_ICON_PATH,
+     * baked in at build time -- see src/Makefile.am).  Fall back to the
+     * stock "network-wireless" themed icon if the build did not define it. */
+    pn_device_provider_register ("zigbee", "Zigbee Devices", ZB_ICON_PATH,
                                  zb_dialog_present, NULL, NULL);
 
     return &info;
