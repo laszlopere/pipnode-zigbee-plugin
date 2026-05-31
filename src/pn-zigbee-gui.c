@@ -92,6 +92,10 @@
  * whenever the device set changes.  We read it to populate the list. */
 #define ZB_DEV_DEVICES_TOPIC "zigbee2mqtt/bridge/devices"
 
+/* Z2M's full settings, retained.  config.devices[<ieee>] carries each device's
+ * configured option values (calibration/precision); the only place they live. */
+#define ZB_DEV_INFO_TOPIC    "zigbee2mqtt/bridge/info"
+
 /* Device-level settings (friendly name, disabled, retain, definition.options,
  * removal) are set through Z2M's bridge request API, not the per-device
  * "<name>/set" path the live-state controls use.  Requests go to these topics;
@@ -204,6 +208,15 @@ typedef struct
      * we keep a copy.  NULL until the first inventory arrives. */
     JsonNode        *devices;
 
+    /* Deep copy of the latest bridge/info `config` object.  Z2M publishes its
+     * full settings here (retained); config.devices[<ieee>] holds each device's
+     * configured OPTION values (calibration, precision, …) and config.device_options
+     * the global fallbacks.  That is the ONLY place those live -- they are Z2M-side
+     * post-processing options with no device attribute behind them, so they never
+     * appear in the state topic and have no /get.  NULL until the first
+     * bridge/info arrives. */
+    JsonNode        *config;
+
     /* Live per-device state: friendly_name (owned gchar*) -> a deep copy
      * of the latest retained zigbee2mqtt/<friendly_name> payload (owned
      * JsonNode object, freed with json_node_unref).  Refreshed on every
@@ -291,6 +304,11 @@ zb_control_free (gpointer data)
  * (zb_capture_state) calls it to repaint the shown controls from a
  * confirmed re-publish (item h). */
 static void zb_seed_controls (ZbDevCtx *ctx);
+
+/* Defined in the settings-pages section below; the message handler
+ * (zb_ingest_bridge_config) calls it to repaint the shown device's option
+ * controls from a fresh bridge/info config. */
+static void zb_seed_bridge_config (ZbDevCtx *ctx);
 
 /* Defined in the device-page section below; the message handler repaints the
  * Firmware section's status/progress from the device state's `update` object
@@ -621,6 +639,40 @@ zb_ingest_devices (ZbDevCtx *ctx, PnMessage *message)
     zb_join_on_inventory (ctx);
 }
 
+/* Parse a bridge/info publish: keep a private copy of its `config` object.
+ * config.devices[<ieee>] is where a device's configured OPTION values
+ * (calibration, precision, …) live -- those are Z2M-side post-processing
+ * options with no device attribute behind them, so they never reach the state
+ * topic and cannot be /get.  When the shown device's options are among them,
+ * re-seed so they display the real configured value.  Z2M re-publishes
+ * bridge/info whenever an option changes, so this also reflects an Apply. */
+static void
+zb_ingest_bridge_config (ZbDevCtx *ctx, PnMessage *message)
+{
+    JsonNode   *payload = pn_message_get_member (message, "payload");
+    JsonObject *info;
+    JsonNode   *config;
+
+    if (payload == NULL || !JSON_NODE_HOLDS_OBJECT (payload))
+        return;
+    info = json_node_get_object (payload);
+    if (!json_object_has_member (info, "config"))
+        return;
+    config = json_object_get_member (info, "config");
+    if (config == NULL || !JSON_NODE_HOLDS_OBJECT (config))
+        return;
+
+    /* Keep our own deep copy -- the message owns the borrowed node. */
+    g_clear_pointer (&ctx->config, json_node_unref);
+    ctx->config = json_node_copy (config);
+
+    /* Repaint the open device's option controls from the fresh config.
+     * zb_seed_bridge_config re-anchors each control it paints, so the refresh
+     * is not mistaken for a local edit. */
+    if (ctx->selected_id != NULL)
+        zb_seed_bridge_config (ctx);
+}
+
 /* Surface a bridge/response/device/<cmd> acknowledgement in the status bar.
  * Z2M replies here to our rename/options/remove requests with
  * {status: "ok"|"error", error, data}; a successful change also re-publishes
@@ -720,6 +772,8 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
     topic = pn_message_get_topic (message);
     if (g_strcmp0 (topic, ZB_DEV_DEVICES_TOPIC) == 0)
         zb_ingest_devices (ctx, message);
+    else if (g_strcmp0 (topic, ZB_DEV_INFO_TOPIC) == 0)
+        zb_ingest_bridge_config (ctx, message);
     else if (g_strcmp0 (topic, ZB_DEV_PERMIT_RESPONSE_TOPIC) == 0)
         zb_report_permit_response (ctx, message);
     else if (topic != NULL && g_str_has_prefix (topic, ZB_DEV_RESPONSE_PREFIX))
@@ -747,6 +801,7 @@ zb_start_source (ZbDevCtx *ctx)
     ctx->count = 0;
     pn_device_form_set_value (ctx->count_label, "0");
     g_clear_pointer (&ctx->devices, json_node_unref);
+    g_clear_pointer (&ctx->config, json_node_unref);
     pn_device_dialog_set_device_rows (ctx->shell, NULL);   /* clear list */
 
     /* The inventory and live state replay on reconnect; drop the stale
@@ -2935,6 +2990,91 @@ zb_seed_controls (ZbDevCtx *ctx)
     }
 }
 
+/* Seed the shown device's OPTION controls (calibration, precision, …) from the
+ * cached bridge/info config.  Those values live only in Z2M's settings
+ * (config.devices[<ieee>], with config.device_options as the global fallback) --
+ * they are never in the device state topic and have no /get, so this is the only
+ * way to show the real configured value.  Keyed by selected_id (the IEEE, which
+ * config.devices is indexed by).  Each control it paints re-anchors its baseline
+ * so a later bridge/info refresh is not seen as a local edit.  A no-op until a
+ * bridge/info has arrived. */
+static void
+zb_seed_bridge_config (ZbDevCtx *ctx)
+{
+    JsonObject *cfg, *devices, *perdev, *globals;
+    guint       i;
+
+    if (ctx->config == NULL || ctx->selected_id == NULL ||
+        !JSON_NODE_HOLDS_OBJECT (ctx->config))
+        return;
+    cfg     = json_node_get_object (ctx->config);
+    devices = zb_peek_object (cfg, "devices");
+    globals = zb_peek_object (cfg, "device_options");
+    perdev  = (devices != NULL) ? zb_peek_object (devices, ctx->selected_id)
+                                : NULL;
+    if (perdev == NULL && globals == NULL)
+        return;
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl *c = g_ptr_array_index (ctx->controls, i);
+        JsonNode  *v = NULL;
+
+        if (c->target != ZB_TGT_OPTIONS || c->key == NULL)
+            continue;
+        /* Per-device value wins over the global device_options default. */
+        if (perdev != NULL && json_object_has_member (perdev, c->key))
+            v = json_object_get_member (perdev, c->key);
+        else if (globals != NULL && json_object_has_member (globals, c->key))
+            v = json_object_get_member (globals, c->key);
+        if (v == NULL)
+            continue;
+
+        zb_seed_control_node (c, v);
+        if (c->kind != ZB_CTL_READONLY)
+        {
+            g_free (c->baseline);
+            c->baseline = zb_control_read_string (c);
+        }
+    }
+}
+
+/* Z2M's *_calibration options ship no value_min/value_max/value_default
+ * (zigbee-herdsman-converters exposes.options.calibration), so the dialog builds
+ * them on a +/-1000000 fallback range and the spin sits at that extreme minimum
+ * -- which reads as a real, alarming value for a device that was never
+ * calibrated.  After the value_default and bridge/info seeds have had their
+ * chance, park any such still-at-the-extreme option numeric at a neutral 0
+ * (calibration's effective "no offset"), so it reads sensibly.  Baselines are
+ * snapshotted right after, so this publishes nothing on Apply.  Only the
+ * unbounded fallback range is touched: precision (0..3) and bounded state-set
+ * calibrations keep their real seeds. */
+static void
+zb_sanitize_unseeded_options (ZbDevCtx *ctx)
+{
+    guint i;
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl     *c = g_ptr_array_index (ctx->controls, i);
+        GtkSpinButton *sp;
+        gdouble        lo, hi;
+
+        if (c->kind != ZB_CTL_NUMERIC || c->target != ZB_TGT_OPTIONS)
+            continue;
+        sp = GTK_SPIN_BUTTON (c->widget);
+        gtk_spin_button_get_range (sp, &lo, &hi);
+
+        /* Only the unbounded fallback range, and only while still parked at its
+         * extreme minimum -- any real seed (value_default or bridge/info) moved
+         * it off the edge and must be left alone. */
+        if (lo > -1000000.0 || gtk_spin_button_get_value (sp) > lo)
+            continue;
+        if (lo <= 0.0 && hi >= 0.0)
+            gtk_spin_button_set_value (sp, 0.0);
+    }
+}
+
 /* (g) Snapshot every editable control's just-seeded value as its baseline,
  * so the first Apply publishes only what the user actually changes.  Run
  * after zb_seed_controls -- including for controls left at their build
@@ -3028,7 +3168,14 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
      * built control from the captured live state and (g) snapshot baselines
      * so each page's Apply publishes only changes. */
     zb_build_device_pages (ctx, dev, exposes, options);
+    /* Options (calibration/precision) have no live state and no /get; their real
+     * configured values come from bridge/info.  Overlay them before the live-state
+     * seed, then park any *_calibration left unseeded at a sane 0 rather than the
+     * -1000000 fallback minimum -- both before the baseline snapshot, so neither
+     * shows as a local change on Apply. */
+    zb_seed_bridge_config (ctx);
     zb_seed_controls (ctx);
+    zb_sanitize_unseeded_options (ctx);
     zb_snapshot_baselines (ctx);
 
     /* Any enum still showing nothing (no live value, no default) gets a
@@ -3530,6 +3677,7 @@ zb_dev_ctx_free (gpointer data)
 
     zb_drop_source (ctx);
     g_clear_pointer (&ctx->devices, json_node_unref);
+    g_clear_pointer (&ctx->config, json_node_unref);
 
     /* Shell already cleared, so the pages are torn down by the dialog
      * itself -- just free our tracking containers and the state map. */
