@@ -70,6 +70,11 @@
  * (item j), so its handler knows which property to re-request. */
 #define ZB_GET_KEY_QDATA "pn-zigbee-get-key"
 
+/* The owned key + trigger value a write-only action button (e.g. Identify)
+ * carries, so its handler publishes "<name>/set" {key: value}. */
+#define ZB_ACTION_KEY_QDATA "pn-zigbee-action-key"
+#define ZB_ACTION_VAL_QDATA "pn-zigbee-action-val"
+
 /* The owned last-committed description an inline-edit Description label
  * carries, so its ::committed handler skips a no-op re-publish (the signal
  * fires on every Enter / focus-out, even when nothing changed). */
@@ -118,6 +123,8 @@
 #define ZB_DEV_RENAME_TOPIC   "zigbee2mqtt/bridge/request/device/rename"
 #define ZB_DEV_OPTIONS_TOPIC  "zigbee2mqtt/bridge/request/device/options"
 #define ZB_DEV_REMOVE_TOPIC   "zigbee2mqtt/bridge/request/device/remove"
+#define ZB_DEV_OTA_CHECK_TOPIC  "zigbee2mqtt/bridge/request/device/ota_update/check"
+#define ZB_DEV_OTA_UPDATE_TOPIC "zigbee2mqtt/bridge/request/device/ota_update/update"
 #define ZB_DEV_RESPONSE_PREFIX "zigbee2mqtt/bridge/response/device/"
 
 /* What kind of widget a built settings control is, so the value-seeding
@@ -153,6 +160,10 @@ typedef struct
     ZbCtlKind   kind;
     ZbTarget    target;     /* which Z2M channel Apply publishes it to */
     GtkWidget  *widget;     /* the control or value label (borrowed) */
+    gboolean    gettable;   /* Z2M access bit 4: re-requestable with /get */
+    gboolean    placeholder; /* ENUM only: an "(unknown)" row sits at index 0
+                              * and is selected, because no value has seeded
+                              * yet.  Dropped the moment a real value arrives. */
     gchar      *value_on;   /* binary mapping, owned; NULL -> JSON bool */
     gchar      *value_off;
 
@@ -204,6 +215,18 @@ typedef struct
      * shown on the right (owned), or NULL when none is selected. */
     gchar           *selected_name;
 
+    /* The list-row id (IEEE address) of that same selected device (owned),
+     * the stable key the device pane matches on -- friendly_name can be
+     * renamed, the id cannot.  Used to restore the selection after a
+     * reconnect blanks the list. */
+    gchar           *selected_id;
+
+    /* Set by a reconnect (zb_start_source) to the selected_id it is about to
+     * clear, so when the inventory replays the open device is re-selected
+     * (rebuilding its pages and re-firing the gettable /get).  NULL when no
+     * restore is pending.  Owned. */
+    gchar           *pending_reselect;
+
     /* The dynamically-built device pages currently in the notebook
      * (borrowed GtkWidget*; the notebook owns them).  Tracked so a
      * re-select or dialog close can drop exactly those, keeping the
@@ -215,6 +238,18 @@ typedef struct
      * is cleared together with device_pages.  The seed/write-back passes
      * iterate it.  Never NULL once the dialog is built. */
     GPtrArray       *controls;
+
+    /* Firmware / OTA widgets on the selected device's "Firmware" section
+     * (borrowed; the notebook page owns them, so they are cleared to NULL in
+     * lockstep with the device pages).  All NULL when no device is selected or
+     * the device carries no firmware info.  fw_status is the live state label,
+     * fw_progress the bar shown only while flashing, fw_check / fw_install the
+     * two action buttons.  zb_refresh_firmware repaints them from the device
+     * state's `update` object as it arrives. */
+    GtkWidget       *fw_status;
+    GtkWidget       *fw_progress;
+    GtkWidget       *fw_check;
+    GtkWidget       *fw_install;
 
     /* Pairing ("join window") UI.  join_start is the Broker page's "open join
      * window" button (borrowed; the page owns it), insensitive until a broker
@@ -256,6 +291,11 @@ zb_control_free (gpointer data)
  * (zb_capture_state) calls it to repaint the shown controls from a
  * confirmed re-publish (item h). */
 static void zb_seed_controls (ZbDevCtx *ctx);
+
+/* Defined in the device-page section below; the message handler repaints the
+ * Firmware section's status/progress from the device state's `update` object
+ * (zb_capture_state) and from an ota_update response (zb_report_response). */
+static void zb_refresh_firmware (ZbDevCtx *ctx);
 
 /* Defined in the pairing section below; the inventory handler
  * (zb_ingest_devices) calls it to refresh the open join dialog's joined
@@ -325,6 +365,12 @@ zb_clear_device_pages (ZbDevCtx *ctx)
     g_ptr_array_set_size (ctx->device_pages, 0);
     if (ctx->controls != NULL)
         g_ptr_array_set_size (ctx->controls, 0);
+
+    /* The Firmware section lived on a removed page too. */
+    ctx->fw_status   = NULL;
+    ctx->fw_progress = NULL;
+    ctx->fw_check    = NULL;
+    ctx->fw_install  = NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -345,6 +391,21 @@ zb_peek_string (JsonObject *obj, const gchar *key)
         json_node_get_value_type (n) != G_TYPE_STRING)
         return NULL;
     return json_node_get_string (n);
+}
+
+/* Borrow an object-valued member off @obj, or NULL when absent / not an
+ * object.  Valid only while @obj lives. */
+static JsonObject *
+zb_peek_object (JsonObject *obj, const gchar *key)
+{
+    JsonNode *n;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return NULL;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_OBJECT (n))
+        return NULL;
+    return json_node_get_object (n);
 }
 
 /* Build the dim second line for a device row from its Z2M definition
@@ -478,7 +539,12 @@ zb_capture_state (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
      * zb_seed_controls reads the same ctx->state entry and re-anchors each
      * painted control's baseline. */
     if (ctx->selected_name != NULL && g_strcmp0 (name, ctx->selected_name) == 0)
+    {
         zb_seed_controls (ctx);
+        /* The same state publish carries the `update` object; refresh the
+         * Firmware section so its status/progress track the flash live. */
+        zb_refresh_firmware (ctx);
+    }
 }
 
 /* Parse a bridge/devices publish: store a private copy of the inventory
@@ -534,6 +600,18 @@ zb_ingest_devices (ZbDevCtx *ctx, PnMessage *message)
     pn_device_dialog_set_device_rows (ctx->shell, rows);
     g_ptr_array_unref (rows);
 
+    /* A reconnect blanked the list and stashed the device that was open;
+     * now that its row is back, re-select it (a no-op if it left the
+     * network).  That fires zb_on_device_selected, which rebuilds the pages
+     * and re-issues the gettable /get -- so a value still missing before the
+     * reconnect gets asked for again. */
+    if (ctx->pending_reselect != NULL)
+    {
+        gchar *id = g_steal_pointer (&ctx->pending_reselect);
+        pn_device_dialog_reselect_device (ctx->shell, id);
+        g_free (id);
+    }
+
     pn_device_dialog_set_statusf (ctx->shell,
                                   "%u device%s reported by Zigbee2MQTT.",
                                   kept, kept == 1 ? "" : "s");
@@ -561,6 +639,37 @@ zb_report_response (ZbDevCtx *ctx, const gchar *topic, PnMessage *message)
     obj    = json_node_get_object (payload);
     status = zb_peek_string (obj, "status");
     error  = zb_peek_string (obj, "error");
+
+    /* Firmware (OTA) replies read better in their own words than a bare
+     * "Device ota_update/check: ok.", and a check carries update_available so
+     * we can say up-to-date vs. update-available without waiting for the state
+     * republish.  Either way, repaint the Firmware section. */
+    if (g_str_has_prefix (cmd, "ota_update/"))
+    {
+        if (g_strcmp0 (status, "error") == 0)
+            pn_device_dialog_set_statusf (
+                    ctx->shell, "Firmware update failed: %s",
+                    error != NULL ? error : "unknown error");
+        else if (g_str_has_prefix (cmd, "ota_update/check"))
+        {
+            JsonObject *data  = zb_peek_object (obj, "data");
+            gboolean    avail = data != NULL &&
+                                json_object_has_member (data, "update_available") &&
+                                json_object_get_boolean_member (data,
+                                                                "update_available");
+            pn_device_dialog_set_status (
+                    ctx->shell, avail ? "Firmware update available."
+                                      : "Firmware is up to date.");
+        }
+        else if (g_str_has_prefix (cmd, "ota_update/update"))
+            pn_device_dialog_set_status (ctx->shell, "Firmware update finished.");
+        else
+            pn_device_dialog_set_statusf (ctx->shell, "Firmware %s: ok.",
+                                          cmd + strlen ("ota_update/"));
+
+        zb_refresh_firmware (ctx);
+        return;
+    }
 
     if (g_strcmp0 (status, "error") == 0)
         pn_device_dialog_set_statusf (ctx->shell, "Device %s failed: %s",
@@ -642,7 +751,12 @@ zb_start_source (ZbDevCtx *ctx)
 
     /* The inventory and live state replay on reconnect; drop the stale
      * selection, its pages and the per-device state so nothing carries
-     * over from the previous broker/session. */
+     * over from the previous broker/session.  Remember which device was
+     * open first, so once the replayed inventory lands it is re-selected --
+     * rebuilding its pages and re-firing the gettable /get so its values
+     * (an enum the device had not yet answered, say) refill themselves. */
+    g_free (ctx->pending_reselect);
+    ctx->pending_reselect = g_steal_pointer (&ctx->selected_id);
     g_clear_pointer (&ctx->selected_name, g_free);
     g_hash_table_remove_all (ctx->state);
     zb_clear_device_pages (ctx);
@@ -706,7 +820,7 @@ zb_on_scan (gpointer user_data)
         zb_start_source (ctx);
     else
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply to discover devices.");
+                ctx->shell, "Pick a broker and press Connect to discover devices.");
 }
 
 /* ------------------------------------------------------------------ */
@@ -922,16 +1036,31 @@ zb_seed_control_node (ZbControl *c, JsonNode *v)
     case ZB_CTL_ENUM:
         {
             gchar *s = zb_json_to_display (v);
-            /* The reported value may not be one of the enum's advertised
-             * `values` (a device can report a state outside the settable set,
-             * or the definition can lag the firmware).  set_active_id then
-             * silently fails and the combo keeps showing the wrong row -- which
-             * reads as "the dialog ignores what the device reports".  Append
-             * the value as its own row so the device's truth is always shown. */
-            if (!gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s))
+            /* A blank reported value carries no selection -- leave whatever is
+             * shown (including an "(unknown)" placeholder) rather than snapping
+             * the combo to the placeholder's own empty id. */
+            if (s != NULL && *s != '\0')
             {
-                gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (c->widget), s, s);
-                gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+                /* The reported value may not be one of the enum's advertised
+                 * `values` (a device can report a state outside the settable
+                 * set, or the definition can lag the firmware).  set_active_id
+                 * then silently fails and the combo keeps showing the wrong row
+                 * -- which reads as "the dialog ignores what the device
+                 * reports".  Append the value as its own row so the device's
+                 * truth is always shown. */
+                if (!gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s))
+                {
+                    gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (c->widget),
+                                               s, s);
+                    gtk_combo_box_set_active_id (GTK_COMBO_BOX (c->widget), s);
+                }
+                /* A real value now occupies the combo: retire the leading
+                 * "(unknown)" placeholder so it cannot be re-picked. */
+                if (c->placeholder)
+                {
+                    gtk_combo_box_text_remove (GTK_COMBO_BOX_TEXT (c->widget), 0);
+                    c->placeholder = FALSE;
+                }
             }
             g_free (s);
         }
@@ -967,6 +1096,10 @@ zb_seed_control_node (ZbControl *c, JsonNode *v)
     }
 }
 
+/* Defined below; zb_request_all_gettable publishes through it before its
+ * definition appears. */
+static void zb_publish_to (ZbDevCtx *ctx, const gchar *topic, JsonObject *obj);
+
 /* Record a built control bound to @key for the seed / write-back passes.
  * Takes ownership of @key, @value_on and @value_off.  Returns the tracked
  * control (owned by ctx->controls) so the caller can also file it under a
@@ -985,6 +1118,50 @@ zb_track_control (ZbDevCtx *ctx, gchar *key, ZbCtlKind kind, ZbTarget target,
     c->value_off = value_off;
     g_ptr_array_add (ctx->controls, c);
     return c;
+}
+
+/* Ask the device to report every readable value, so opening it fills the
+ * "Settings"/"Reported values" pages on their own as the replies arrive.
+ *
+ * Each gettable property is requested in its OWN single-key /get rather than
+ * one combined { "<k1>": "", "<k2>": "", … } payload: a Tuya converter that
+ * throws on one unreadable property (switch_type is a classic offender) aborts
+ * the whole batch, so every other value would silently go unrequested too.
+ * Per-key requests keep one bad property from starving the rest.  A no-op when
+ * nothing is gettable or no sink is connected. */
+static void
+zb_request_all_gettable (ZbDevCtx *ctx)
+{
+    GHashTable *seen;
+    gchar      *topic;
+    guint       i;
+
+    if (ctx->sink == NULL || ctx->selected_name == NULL)
+        return;
+
+    topic = g_strdup_printf ("%s%s/get", ZB_DEV_TOPIC_PREFIX,
+                             ctx->selected_name);
+    seen  = g_hash_table_new (g_str_hash, g_str_equal);
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl  *c = g_ptr_array_index (ctx->controls, i);
+        JsonObject *obj;
+
+        /* Only live-state (SET-channel) properties have a /get endpoint; a
+         * device-options control does not.  Request each distinct key once. */
+        if (!c->gettable || c->target != ZB_TGT_SET || c->key == NULL ||
+            g_hash_table_contains (seen, c->key))
+            continue;
+        g_hash_table_add (seen, c->key);
+
+        obj = json_object_new ();
+        json_object_set_string_member (obj, c->key, "");
+        zb_publish_to (ctx, topic, obj);            /* consumes obj */
+    }
+
+    g_hash_table_destroy (seen);
+    g_free (topic);
 }
 
 /* The current value of an editable control as a stable string, for change
@@ -1112,7 +1289,7 @@ zb_publish_changes (ZbDevCtx *ctx, GPtrArray *page_controls)
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before writing.");
+                ctx->shell, "Connect to a broker before writing.");
         return;
     }
     if (ctx->selected_name == NULL)
@@ -1259,7 +1436,7 @@ zb_publish_get (ZbDevCtx *ctx, const gchar *key)
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before refreshing.");
+                ctx->shell, "Connect to a broker before refreshing.");
         return;
     }
     if (ctx->selected_name == NULL || key == NULL)
@@ -1301,6 +1478,77 @@ zb_make_get_button (ZbDevCtx *ctx, const gchar *key)
                             g_strdup (key), g_free);
     g_signal_connect (btn, "clicked", G_CALLBACK (zb_on_get_clicked), ctx);
     return btn;
+}
+
+/* A write-only action expose (Z2M access == 2: settable, never published or
+ * gettable -- e.g. "identify", which makes the device blink) has no value to
+ * show or refresh.  It is triggered, not read, so render it as a button that
+ * publishes "<name>/set" { key: value } where value is the expose's single
+ * enum value (or the key itself).  The button carries its own owned key+value
+ * so it does not depend on any tracked control. */
+static void
+zb_on_action_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx    *ctx = user_data;
+    const gchar *key = g_object_get_data (G_OBJECT (button), ZB_ACTION_KEY_QDATA);
+    const gchar *val = g_object_get_data (G_OBJECT (button), ZB_ACTION_VAL_QDATA);
+    JsonObject  *obj;
+    gchar       *topic;
+
+    if (ctx->sink == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Connect to a broker before sending commands.");
+        return;
+    }
+    if (ctx->selected_name == NULL || key == NULL)
+        return;
+
+    obj = json_object_new ();
+    json_object_set_string_member (obj, key, val != NULL ? val : "");
+    topic = g_strdup_printf ("%s%s/set", ZB_DEV_TOPIC_PREFIX, ctx->selected_name);
+    zb_publish_to (ctx, topic, obj);                /* consumes obj */
+    g_free (topic);
+
+    pn_device_dialog_set_statusf (ctx->shell, "Sent %s to %s.",
+                                  key, ctx->selected_name);
+}
+
+/* Build a row for a write-only action expose: a label and a trigger button.
+ * Returns TRUE when it handled @exp (an action), FALSE to let the caller fall
+ * through to the normal value/control rows. */
+static gboolean
+zb_build_action_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row, JsonObject *exp,
+                     const gchar *label, const gchar *key)
+{
+    JsonArray   *values = zb_object_array (exp, "values");
+    const gchar *desc   = zb_peek_string (exp, "description");
+    const gchar *val    = key;
+    GtkWidget   *cell, *btn;
+    gchar       *btnlbl;
+
+    if (values != NULL && json_array_get_length (values) > 0)
+    {
+        const gchar *v0 = json_node_get_string (json_array_get_element (values, 0));
+        if (v0 != NULL)
+            val = v0;
+    }
+
+    cell = pn_device_form_attach_control_row (grid, (*row)++, label);
+    /* Title-case-ish: just reuse the label as the button text. */
+    btnlbl = g_strdup (label);
+    btn = gtk_button_new_with_label (btnlbl);
+    g_free (btnlbl);
+    gtk_widget_set_halign (btn, GTK_ALIGN_START);
+    if (desc != NULL)
+        gtk_widget_set_tooltip_text (btn, desc);
+    g_object_set_data_full (G_OBJECT (btn), ZB_ACTION_KEY_QDATA,
+                            g_strdup (key), g_free);
+    g_object_set_data_full (G_OBJECT (btn), ZB_ACTION_VAL_QDATA,
+                            g_strdup (val), g_free);
+    g_signal_connect (btn, "clicked", G_CALLBACK (zb_on_action_clicked), ctx);
+    gtk_box_pack_start (GTK_BOX (cell), btn, FALSE, FALSE, 0);
+    return TRUE;
 }
 
 /* (j) Append a named-preset combo for a numeric expose into @cell: a leading
@@ -1361,7 +1609,8 @@ zb_add_numeric_presets (GtkWidget *cell, GtkWidget *spin, JsonArray *presets)
 static void
 zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
                      JsonObject *exp, GPtrArray *page_controls,
-                     ZbTarget target, gboolean force_settable)
+                     ZbTarget target, gboolean force_settable,
+                     gboolean per_row_get)
 {
     const gchar *type     = zb_peek_string (exp, "type");
     const gchar *label    = zb_expose_label (exp);
@@ -1375,6 +1624,16 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
     GtkWidget   *w        = NULL;
     ZbCtlKind    kind     = ZB_CTL_READONLY;
     gchar       *value_on = NULL, *value_off = NULL;
+
+    /* A write-only action (access == 2 exactly: settable, never published or
+     * gettable) has no value -- it is triggered.  Render it as a button and
+     * stop; it is not a tracked, seedable control. */
+    if (key != NULL && target == ZB_TGT_SET && access == 2)
+    {
+        zb_build_action_row (ctx, grid, row, exp, label, key);
+        g_free (key);
+        return;
+    }
 
     if (settable && g_strcmp0 (type, "binary") == 0)
     {
@@ -1476,13 +1735,14 @@ zb_build_expose_row (ZbDevCtx *ctx, GtkGrid *grid, gint *row,
      * up on the right edge whatever the row's control type.  The hexpanding
      * value cell at column 1 pushes them flush right.  Only live-state (SET)
      * controls support "<name>/get"; device options have no get endpoint. */
-    if (key != NULL && gettable && target == ZB_TGT_SET)
+    if (per_row_get && key != NULL && gettable && target == ZB_TGT_SET)
         gtk_grid_attach (grid, zb_make_get_button (ctx, key), 2, used, 1, 1);
 
     if (key != NULL)
     {
         ZbControl *c = zb_track_control (ctx, key, kind, target, w,
                                          value_on, value_off);
+        c->gettable = gettable;
 
         /* Device-option controls have no live source to seed from (item f
          * only paints from the per-device state topic, which carries the
@@ -1586,7 +1846,7 @@ zb_on_name_committed (PnInlineEditLabel *edit, const gchar *text,
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before renaming.");
+                ctx->shell, "Connect to a broker before renaming.");
         return;
     }
 
@@ -1621,7 +1881,7 @@ zb_on_desc_committed (PnInlineEditLabel *edit, const gchar *text,
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before editing.");
+                ctx->shell, "Connect to a broker before editing.");
         return;
     }
 
@@ -1700,7 +1960,7 @@ zb_do_remove (ZbDevCtx *ctx, gboolean force)
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before removing.");
+                ctx->shell, "Connect to a broker before removing.");
         return;
     }
     if (ctx->selected_name == NULL)
@@ -1761,6 +2021,276 @@ zb_on_remove_clicked (GtkButton *button, gpointer user_data)
         zb_do_remove (ctx, gtk_toggle_button_get_active (
                               GTK_TOGGLE_BUTTON (force_chk)));
     gtk_widget_destroy (dialog);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Firmware / OTA                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Publish an { id: <selected device> } request to @topic (an OTA check or
+ * update endpoint).  A no-op with a status nudge when nothing is connected. */
+static void
+zb_ota_request (ZbDevCtx *ctx, const gchar *topic)
+{
+    JsonObject *req;
+
+    if (ctx->sink == NULL || ctx->selected_name == NULL)
+    {
+        pn_device_dialog_set_status (
+                ctx->shell, "Connect to a broker before checking firmware.");
+        return;
+    }
+    req = json_object_new ();
+    json_object_set_string_member (req, "id", ctx->selected_name);
+    zb_publish_to (ctx, topic, req);                /* consumes req */
+}
+
+/* "Check for updates": ask Z2M to re-query the device's firmware.  Z2M answers
+ * on bridge/response/device/ota_update/check (zb_report_response) and
+ * republishes the device state with a fresh `update` object. */
+static void
+zb_on_fw_check_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx *ctx = user_data;
+
+    (void) button;
+    zb_ota_request (ctx, ZB_DEV_OTA_CHECK_TOPIC);
+    if (ctx->fw_status != NULL)
+        pn_device_form_set_value (GTK_LABEL (ctx->fw_status),
+                                  "Checking\xe2\x80\xa6");
+    pn_device_dialog_set_statusf (ctx->shell,
+                                  "Checking %s for firmware updates\xe2\x80\xa6",
+                                  ctx->selected_name);
+}
+
+/* "Install update": confirm (an OTA flash is slow and must not be interrupted),
+ * then publish the update request.  Progress arrives in the device state's
+ * `update` object and repaints the section via zb_refresh_firmware. */
+static void
+zb_on_fw_install_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx  *ctx = user_data;
+    GtkWidget *parent, *dialog, *go;
+    gint       resp;
+
+    (void) button;
+    if (ctx->selected_name == NULL || ctx->shell == NULL)
+        return;
+
+    parent = pn_device_dialog_get_dialog (ctx->shell);
+    dialog = gtk_message_dialog_new (
+            GTK_WINDOW (parent),
+            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            GTK_MESSAGE_WARNING, GTK_BUTTONS_NONE,
+            "Install new firmware on \xe2\x80\x9c%s\xe2\x80\x9d?",
+            ctx->selected_name);
+    gtk_message_dialog_format_secondary_text (
+            GTK_MESSAGE_DIALOG (dialog),
+            "The device downloads and flashes the firmware over the air. This "
+            "can take several minutes, during which the device is unavailable. "
+            "Keep it powered and within range, and do not remove it -- "
+            "interrupting a flash can leave it unusable.");
+
+    gtk_dialog_add_button (GTK_DIALOG (dialog), "Cancel", GTK_RESPONSE_CANCEL);
+    go = gtk_dialog_add_button (GTK_DIALOG (dialog), "Install update",
+                                GTK_RESPONSE_ACCEPT);
+    gtk_style_context_add_class (gtk_widget_get_style_context (go),
+                                 "suggested-action");
+    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_CANCEL);
+
+    resp = gtk_dialog_run (GTK_DIALOG (dialog));
+    gtk_widget_destroy (dialog);
+    if (resp != GTK_RESPONSE_ACCEPT)
+        return;
+
+    zb_ota_request (ctx, ZB_DEV_OTA_UPDATE_TOPIC);
+    if (ctx->fw_status != NULL)
+        pn_device_form_set_value (GTK_LABEL (ctx->fw_status),
+                                  "Starting\xe2\x80\xa6");
+    if (ctx->fw_install != NULL)
+        gtk_widget_set_sensitive (ctx->fw_install, FALSE);
+    pn_device_dialog_set_statusf (
+            ctx->shell, "Starting firmware update for %s \xe2\x80\x94 keep it "
+                        "powered\xe2\x80\xa6", ctx->selected_name);
+}
+
+/* Repaint the Firmware section from the selected device's live `update` object
+ * { state, progress, remaining, installed_version, latest_version }.  A no-op
+ * when no section is built.  Drives the status line, the progress bar (shown
+ * only while flashing) and the two buttons' sensitivity. */
+static void
+zb_refresh_firmware (ZbDevCtx *ctx)
+{
+    JsonObject  *state, *upd;
+    JsonNode    *snode;
+    const gchar *st;
+    gchar       *text   = NULL;
+    gboolean     avail  = FALSE;
+    gboolean     active = FALSE;   /* a flash is in progress */
+
+    if (ctx->fw_status == NULL)
+        return;                    /* device has no Firmware section */
+
+    snode = (ctx->selected_name != NULL)
+                ? g_hash_table_lookup (ctx->state, ctx->selected_name) : NULL;
+    state = (snode != NULL && JSON_NODE_HOLDS_OBJECT (snode))
+                ? json_node_get_object (snode) : NULL;
+    upd   = (state != NULL) ? zb_peek_object (state, "update") : NULL;
+    st    = (upd   != NULL) ? zb_peek_string (upd, "state")    : NULL;
+
+    if (g_strcmp0 (st, "updating") == 0)
+    {
+        gdouble prog = zb_peek_double (upd, "progress",  -1.0);
+        gdouble rem  = zb_peek_double (upd, "remaining", -1.0);
+
+        active = TRUE;
+        if (prog >= 0.0 && rem >= 0.0)
+            text = g_strdup_printf ("Updating\xe2\x80\xa6 %.0f%% "
+                                    "(about %.0f s remaining)", prog, rem);
+        else if (prog >= 0.0)
+            text = g_strdup_printf ("Updating\xe2\x80\xa6 %.0f%%", prog);
+        else
+            text = g_strdup ("Updating\xe2\x80\xa6");
+
+        gtk_widget_set_visible (ctx->fw_progress, TRUE);
+        gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (ctx->fw_progress),
+                                       prog >= 0.0 ? prog / 100.0 : 0.0);
+    }
+    else
+    {
+        gtk_widget_set_visible (ctx->fw_progress, FALSE);
+
+        if (g_strcmp0 (st, "available") == 0)
+        {
+            gchar *iv = zb_peek_display (upd, "installed_version");
+            gchar *lv = zb_peek_display (upd, "latest_version");
+
+            avail = TRUE;
+            if (iv != NULL && lv != NULL)
+                text = g_strdup_printf ("Update available (installed %s, "
+                                        "latest %s)", iv, lv);
+            else
+                text = g_strdup ("Update available");
+            g_free (iv);
+            g_free (lv);
+        }
+        else if (g_strcmp0 (st, "scheduled") == 0)
+            text = g_strdup ("Update scheduled \xe2\x80\x94 starts on the "
+                             "device's next check-in");
+        else if (g_strcmp0 (st, "idle") == 0)
+            text = g_strdup ("Up to date");
+        else
+            text = g_strdup ("Not available");
+    }
+
+    pn_device_form_set_value (GTK_LABEL (ctx->fw_status), text);
+    g_free (text);
+
+    /* Only a connected sink can publish a request; an install only makes sense
+     * when one is offered, a check whenever a flash is not already running. */
+    gtk_widget_set_sensitive (ctx->fw_check,
+                              ctx->sink != NULL && !active);
+    gtk_widget_set_sensitive (ctx->fw_install,
+                              ctx->sink != NULL && avail);
+}
+
+/* Build the "Firmware" section for @dev: read-only version rows off the
+ * inventory record (software_build_id / date_code, both optional), the live
+ * update-status line, a hidden-until-flashing progress bar, and the Check /
+ * Install buttons.  Skipped entirely for a device that carries neither a
+ * firmware version nor a live `update` object (a Coordinator, say), so the
+ * section only appears where it means something.  Stashes the live widgets on
+ * @ctx for zb_refresh_firmware. */
+static void
+zb_build_firmware_section (ZbDevCtx *ctx, GtkWidget *inner, JsonObject *dev)
+{
+    GtkWidget   *grid  = gtk_grid_new ();
+    GtkWidget   *col, *btnbox;
+    GtkLabel    *status;
+    JsonNode    *snode;
+    JsonObject  *state;
+    gchar       *build = zb_peek_display (dev, "software_build_id");
+    gchar       *date  = zb_peek_display (dev, "date_code");
+    gint         row   = 0;
+    gint         status_row;
+
+    snode = (ctx->selected_name != NULL)
+                ? g_hash_table_lookup (ctx->state, ctx->selected_name) : NULL;
+    state = (snode != NULL && JSON_NODE_HOLDS_OBJECT (snode))
+                ? json_node_get_object (snode) : NULL;
+
+    /* An empty version string is as good as absent -- don't render a blank
+     * row for it. */
+    if (build != NULL && *build == '\0')
+        g_clear_pointer (&build, g_free);
+    if (date != NULL && *date == '\0')
+        g_clear_pointer (&date, g_free);
+
+    /* Nothing firmware-ish to show, and no OTA channel either: drop it. */
+    if (build == NULL && date == NULL &&
+        (state == NULL || zb_peek_object (state, "update") == NULL))
+    {
+        g_free (build);
+        g_free (date);
+        g_object_ref_sink (grid);
+        gtk_widget_destroy (grid);
+        g_object_unref (grid);
+        return;
+    }
+
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Firmware version", build);
+    zb_add_readonly_row (GTK_GRID (grid), &row, "Firmware date",    date);
+
+    /* Update-status row: the live status text, with a flat round-arrow refresh
+     * button at column 2 (the same affordance the per-value rows use) that asks
+     * Z2M to re-check for a newer firmware. */
+    status_row = row++;
+    status = pn_device_form_attach_label_row (GTK_GRID (grid), status_row,
+                                              "Update status");
+    ctx->fw_status = GTK_WIDGET (status);
+    ctx->fw_check  = gtk_button_new_from_icon_name ("view-refresh",
+                                                    GTK_ICON_SIZE_BUTTON);
+    gtk_button_set_relief (GTK_BUTTON (ctx->fw_check), GTK_RELIEF_NONE);
+    gtk_widget_set_valign (ctx->fw_check, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text (ctx->fw_check, "Check for firmware updates");
+    g_signal_connect (ctx->fw_check, "clicked",
+                      G_CALLBACK (zb_on_fw_check_clicked), ctx);
+    gtk_grid_attach (GTK_GRID (grid), ctx->fw_check, 2, status_row, 1, 1);
+
+    col = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+    gtk_box_pack_start (GTK_BOX (col), grid, FALSE, FALSE, 0);
+
+    /* Progress bar, hidden until a flash runs (no_show_all keeps the section's
+     * show_all from revealing it; zb_refresh_firmware toggles visibility). */
+    ctx->fw_progress = gtk_progress_bar_new ();
+    gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (ctx->fw_progress), TRUE);
+    gtk_widget_set_no_show_all (ctx->fw_progress, TRUE);
+    gtk_box_pack_start (GTK_BOX (col), ctx->fw_progress, FALSE, FALSE, 0);
+
+    /* Install: right-aligned like the page Apply buttons. */
+    btnbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign     (btnbox, GTK_ALIGN_END);
+    gtk_widget_set_margin_top (btnbox, 8);
+    ctx->fw_install = gtk_button_new_with_label ("Install update");
+    gtk_style_context_add_class (
+            gtk_widget_get_style_context (ctx->fw_install), "suggested-action");
+    g_signal_connect (ctx->fw_install, "clicked",
+                      G_CALLBACK (zb_on_fw_install_clicked), ctx);
+    gtk_box_pack_start (GTK_BOX (btnbox), ctx->fw_install, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (col), btnbox, FALSE, FALSE, 0);
+
+    zb_add_section_desc (inner, "Firmware",
+                         "The firmware running on this device, and whether a "
+                         "newer version is offered. The refresh button asks the "
+                         "device directly; \xe2\x80\x9cInstall update\xe2\x80\x9d "
+                         "flashes it over the air, which takes a few minutes "
+                         "\xe2\x80\x94 leave the device powered while it runs.",
+                         col);
+
+    /* Paint the initial state from whatever we have already captured. */
+    zb_refresh_firmware (ctx);
 }
 
 /* The always-present "Device" page (first device page, generic -> special):
@@ -1848,9 +2378,13 @@ zb_build_device_page (ZbDevCtx *ctx, JsonObject *dev)
         g_object_unref (info);
     }
 
-    /* Remove: its own foldable section. */
+    /* Firmware: version + OTA, for devices that report it. */
+    zb_build_firmware_section (ctx, inner, dev);
+
+    /* Remove: its own foldable section, the button right-aligned like Apply. */
     rmbox  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_halign (rmbox, GTK_ALIGN_START);
+    gtk_widget_set_halign     (rmbox, GTK_ALIGN_END);
+    gtk_widget_set_margin_top (rmbox, 8);
     remove = gtk_button_new_with_label ("Remove device\xe2\x80\xa6");
     gtk_style_context_add_class (gtk_widget_get_style_context (remove),
                                  "destructive-action");
@@ -1927,16 +2461,16 @@ zb_build_options_page (ZbDevCtx *ctx, JsonObject *dev, JsonArray *options)
     gtk_grid_set_row_spacing    (GTK_GRID (gen), 8);
     gtk_grid_set_column_spacing (GTK_GRID (gen), 12);
     zb_add_generic_options (ctx, GTK_GRID (gen), dev, page);
-    zb_add_section_desc (inner, "Zigbee2MQTT handling (defaults shown)",
+    zb_add_section_desc (inner, "Zigbee2MQTT handling",
                          "These are not settings on the device itself \xe2\x80\x94 "
                          "they tell the hub (Zigbee2MQTT) how to handle this "
                          "device's messages, such as how long to remember its "
                          "last status or whether to ignore it. Most people never "
                          "need them, so the safe choice is to leave them alone. "
-                         "The hub does not report these back, so the boxes show "
-                         "the usual defaults rather than what is in effect; only "
-                         "a box you change is sent, so anything you leave alone "
-                         "stays as it was.", gen);
+                         "\xe2\x80\x9c""Disabled\xe2\x80\x9d shows its real value; "
+                         "the rest are write-only \xe2\x80\x94 the hub does not "
+                         "report them back, so a box you do not touch is left as "
+                         "is, and only a box you change is sent.", gen);
 
     if (n > 0)
     {
@@ -1953,18 +2487,19 @@ zb_build_options_page (ZbDevCtx *ctx, JsonObject *dev, JsonArray *options)
                 continue;
             zb_build_expose_row (ctx, GTK_GRID (grid), &row,
                                  json_node_get_object (elem), page,
-                                 ZB_TGT_OPTIONS, TRUE);
+                                 ZB_TGT_OPTIONS, TRUE, TRUE);
         }
         if (row > 0)
         {
-            zb_add_section_desc (inner, "Device options (defaults shown)",
+            zb_add_section_desc (inner, "Device options",
                                  "These extra options come from the device "
                                  "itself and fine-tune how it behaves \xe2\x80\x94 "
                                  "such as how smoothly a light fades. As with "
-                                 "the section above, the boxes show the usual "
-                                 "defaults rather than the current values, and "
-                                 "only a box you change is sent. If you are "
-                                 "unsure what one does, leave it alone.", grid);
+                                 "the section above, the hub does not report "
+                                 "these back, so only a box you change is sent "
+                                 "and anything you leave alone stays as it is. "
+                                 "If you are unsure what one does, leave it "
+                                 "alone.", grid);
         }
         else
         {
@@ -1990,87 +2525,142 @@ zb_discard_grid (GtkWidget *grid)
     g_object_unref (grid);
 }
 
-/* Build one page titled @title from the bare exposes in @exps, splitting them
- * into two sections: a "Settings" section of the controls the user can change
- * (settable exposes, access bit 2) with the page's Apply button, and a
- * "Reported values" section of the read-only readings the device sends on its
- * own (battery, link quality, …).  Either section is omitted when empty; when
- * there is nothing settable the tab is titled "Status" rather than "Settings",
- * so a sensor with only readings does not masquerade as having settings. */
+/* Build one "Settings" page titled @title from the *settable* bare exposes in
+ * @exps (the caller has already filtered out reported-only ones, which go on
+ * the device's single Reported-values page).  Each control keeps its own
+ * per-row refresh button where the value is gettable, and the page has one
+ * Apply.  A group with no settable control builds nothing. */
 static void
 zb_build_settings_page (ZbDevCtx *ctx, GPtrArray *exps, const gchar *title)
 {
-    GtkWidget   *inner;
-    GtkWidget   *tab   = pn_device_form_new_tab (&inner);
-    GtkWidget   *sgrid = gtk_grid_new ();   /* settable controls */
-    GtkWidget   *rgrid = gtk_grid_new ();   /* read-only reported values */
-    GPtrArray   *page  = g_ptr_array_new ();   /* borrowed settable controls */
-    gint         srow  = 0, rrow = 0;
-    const gchar *tab_title;
-    gchar       *alt   = NULL;
-    guint        i;
+    GtkWidget *inner;
+    GtkWidget *tab  = pn_device_form_new_tab (&inner);
+    GtkWidget *grid = gtk_grid_new ();
+    GPtrArray *page = g_ptr_array_new ();   /* borrowed settable controls */
+    gint       row  = 0;
+    guint      i;
 
-    gtk_grid_set_row_spacing    (GTK_GRID (sgrid), 8);
-    gtk_grid_set_column_spacing (GTK_GRID (sgrid), 12);
-    gtk_grid_set_row_spacing    (GTK_GRID (rgrid), 8);
-    gtk_grid_set_column_spacing (GTK_GRID (rgrid), 12);
-
-    /* A settable expose (access bit 2) is a control; everything else is a
-     * value the device reports.  Route each to its own grid so the Settings
-     * list holds only things you can actually change. */
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
     for (i = 0; i < exps->len; i++)
-    {
-        JsonObject *exp = g_ptr_array_index (exps, i);
+        zb_build_expose_row (ctx, GTK_GRID (grid), &row,
+                             g_ptr_array_index (exps, i), page,
+                             ZB_TGT_SET, FALSE, TRUE);
 
-        if ((zb_expose_access (exp) & 2) != 0)
-            zb_build_expose_row (ctx, GTK_GRID (sgrid), &srow, exp, page,
-                                 ZB_TGT_SET, FALSE);
-        else
-            zb_build_expose_row (ctx, GTK_GRID (rgrid), &rrow, exp, NULL,
-                                 ZB_TGT_SET, FALSE);
+    if (row == 0)   /* nothing settable in this group -> no page */
+    {
+        zb_discard_grid (grid);
+        g_ptr_array_unref (page);
+        g_object_ref_sink (tab);
+        gtk_widget_destroy (tab);
+        g_object_unref (tab);
+        return;
     }
 
-    if (srow > 0)
-        zb_add_section_desc (inner, title,
-                             "These are the adjustable features this device "
-                             "offers \xe2\x80\x94 the list depends on what it can "
-                             "do, so it differs from one device to the next. "
-                             "Changing a value sends it straight to the device, "
-                             "which should react within a second or two. If a "
-                             "value springs back, the device refused or adjusted "
-                             "it.", sgrid);
-    else
-        zb_discard_grid (sgrid);
-
-    if (rrow > 0)
-        zb_add_section_desc (inner, "Reported values",
-                             "These are the latest readings this device sends on "
-                             "its own \xe2\x80\x94 things like battery level or "
-                             "signal strength. They are shown for information "
-                             "only and cannot be changed here. A reading shows "
-                             "\xe2\x80\x9cpending\xe2\x80\xa6\xe2\x80\x9d until the "
-                             "device next reports it; battery-powered sensors "
-                             "often stay quiet until something happens, so a "
-                             "freshly added device may take a while to fill in. "
-                             "Where a refresh button is shown, it asks the "
-                             "device for that value now.", rgrid);
-    else
-        zb_discard_grid (rgrid);
-
-    /* No settable controls -> this is a status page, not a settings page. */
-    tab_title = title;
-    if (srow == 0 && rrow > 0)
-    {
-        if (g_str_has_prefix (title, "Settings"))
-            alt = g_strconcat ("Status", title + strlen ("Settings"), NULL);
-        tab_title = (alt != NULL) ? alt : "Status";
-    }
-
-    zb_add_page_apply (ctx, inner, page);   /* (g) consumes page; no-op if empty */
-    pn_device_dialog_append_page (ctx->shell, tab, tab_title);
+    zb_add_section_desc (inner, title,
+                         "These are the adjustable features this device offers "
+                         "\xe2\x80\x94 the list depends on what it can do, so it "
+                         "differs from one device to the next. Changing a value "
+                         "sends it straight to the device, which should react "
+                         "within a second or two. If a value springs back, the "
+                         "device refused or adjusted it.", grid);
+    zb_add_page_apply (ctx, inner, page);   /* (g) consumes page */
+    pn_device_dialog_append_page (ctx->shell, tab, title);
     g_ptr_array_add (ctx->device_pages, tab);
     gtk_widget_show_all (tab);
-    g_free (alt);
+}
+
+/* The single Refresh button on the Reported-values page: re-request every
+ * gettable value on the device at once. */
+static void
+zb_on_refresh_all_clicked (GtkButton *button, gpointer user_data)
+{
+    ZbDevCtx *ctx = user_data;
+
+    (void) button;
+    zb_request_all_gettable (ctx);
+    pn_device_dialog_set_status (ctx->shell,
+                                 "Asked the device to report its values\xe2\x80\xa6");
+}
+
+/* Build the device's single "Reported values" page from the read-only (not
+ * settable) bare exposes in @reported, plus any keys the device actually
+ * reports in its live state that have no expose at all (e.g. a Tuya leak
+ * sensor's battery `voltage`): @orphans is a borrowed array of those keys
+ * (owned strings), or NULL.  One Refresh button at the bottom re-requests all
+ * gettable values; report-only readings (most sensors) fill in when the device
+ * next sends them.  Builds nothing when there is nothing to show. */
+static void
+zb_build_reported_page (ZbDevCtx *ctx, GPtrArray *reported, GPtrArray *orphans)
+{
+    GtkWidget *inner;
+    GtkWidget *tab  = pn_device_form_new_tab (&inner);
+    GtkWidget *grid = gtk_grid_new ();
+    gint       row  = 0;
+    guint      i;
+
+    gtk_grid_set_row_spacing    (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+
+    for (i = 0; reported != NULL && i < reported->len; i++)
+        zb_build_expose_row (ctx, GTK_GRID (grid), &row,
+                             g_ptr_array_index (reported, i), NULL,
+                             ZB_TGT_SET, FALSE, FALSE);   /* no per-row refresh */
+
+    /* Orphan keys: reported in live state but absent from the definition's
+     * exposes.  Track each as a read-only control so the seed pass paints it
+     * and later state updates keep it current. */
+    for (i = 0; orphans != NULL && i < orphans->len; i++)
+    {
+        const gchar *key = g_ptr_array_index (orphans, i);
+        GtkLabel    *value = pn_device_form_attach_label_row (GTK_GRID (grid),
+                                                              row++, key);
+        ZbControl   *c;
+
+        pn_device_form_set_value (value, "pending\xe2\x80\xa6");
+        c = zb_track_control (ctx, g_strdup (key), ZB_CTL_READONLY, ZB_TGT_SET,
+                              GTK_WIDGET (value), NULL, NULL);
+        (void) c;
+    }
+
+    if (row == 0)
+    {
+        zb_discard_grid (grid);
+        g_object_ref_sink (tab);
+        gtk_widget_destroy (tab);
+        g_object_unref (tab);
+        return;
+    }
+
+    zb_add_section_desc (inner, "Reported values",
+                         "These are the latest readings this device sends on its "
+                         "own \xe2\x80\x94 things like battery level, voltage or "
+                         "signal strength. They are shown for information only and "
+                         "cannot be changed here. A reading shows "
+                         "\xe2\x80\x9cpending\xe2\x80\xa6\xe2\x80\x9d until the "
+                         "device next reports it; battery-powered sensors often "
+                         "stay quiet until something happens (a leak, a button "
+                         "press), so some values appear only then. Refresh asks "
+                         "the device to report everything it can right now.",
+                         grid);
+
+    {
+        GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        GtkWidget *refresh = gtk_button_new_with_label ("Refresh");
+
+        gtk_widget_set_halign     (box, GTK_ALIGN_END);
+        gtk_widget_set_margin_top (box, 8);
+        gtk_widget_set_tooltip_text (refresh,
+                "Ask the device to report its current values now.");
+        g_signal_connect (refresh, "clicked",
+                          G_CALLBACK (zb_on_refresh_all_clicked), ctx);
+        gtk_box_pack_start (GTK_BOX (box), refresh, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (inner), box, FALSE, FALSE, 0);
+    }
+
+    pn_device_dialog_append_page (ctx->shell, tab, "Reported values");
+    g_ptr_array_add (ctx->device_pages, tab);
+    gtk_widget_show_all (tab);
 }
 
 /* (j) Turn the bare (featureless) top-level exposes into Settings pages,
@@ -2135,20 +2725,98 @@ zb_build_bare_pages (ZbDevCtx *ctx, GPtrArray *bare)
  * Top-level composite/typed exposes (switch/light/…) are intentionally skipped
  * -- this dialog configures the device, it does not operate it.  Then jump to
  * the Device page. */
+/* Record every device-state key the @exposes tree maps to (recursing into
+ * composite `features`) into @set, so a later pass can tell which reported
+ * state keys have no expose at all (the "orphans" worth showing anyway). */
+static void
+zb_collect_expose_keys (JsonArray *exposes, GHashTable *set)
+{
+    guint n, i;
+
+    if (exposes == NULL)
+        return;
+    n = json_array_get_length (exposes);
+    for (i = 0; i < n; i++)
+    {
+        JsonNode   *elem = json_array_get_element (exposes, i);
+        JsonObject *exp;
+        JsonArray  *features;
+        gchar      *key;
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        exp = json_node_get_object (elem);
+
+        features = zb_object_array (exp, "features");
+        if (features != NULL)
+            zb_collect_expose_keys (features, set);
+
+        key = zb_expose_key (exp);
+        if (key != NULL)
+            g_hash_table_add (set, key);   /* set owns key */
+    }
+}
+
+/* The keys the selected device currently reports in live state that have no
+ * matching expose in @exposes -- e.g. a Tuya leak sensor publishes `voltage`
+ * (battery millivolts) with no voltage expose.  Returns a new GPtrArray of
+ * owned key strings (caller frees with g_ptr_array_unref), or an empty array.
+ * Only scalar values are surfaced; structured ones (update, overload_protection)
+ * are skipped -- they are not simple readings. */
+static GPtrArray *
+zb_collect_orphan_keys (ZbDevCtx *ctx, JsonArray *exposes)
+{
+    GPtrArray  *orphans = g_ptr_array_new_with_free_func (g_free);
+    GHashTable *known   = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                 g_free, NULL);
+    JsonNode   *snode;
+    JsonObject *state;
+    GList      *members, *l;
+
+    zb_collect_expose_keys (exposes, known);
+
+    snode = (ctx->selected_name != NULL)
+                ? g_hash_table_lookup (ctx->state, ctx->selected_name) : NULL;
+    if (snode == NULL || !JSON_NODE_HOLDS_OBJECT (snode))
+    {
+        g_hash_table_destroy (known);
+        return orphans;
+    }
+    state   = json_node_get_object (snode);
+    members = json_object_get_members (state);
+    for (l = members; l != NULL; l = l->next)
+    {
+        const gchar *key = l->data;
+        JsonNode    *v   = json_object_get_member (state, key);
+
+        if (g_hash_table_contains (known, key))
+            continue;
+        if (v == NULL || !JSON_NODE_HOLDS_VALUE (v))
+            continue;                       /* skip objects/arrays */
+        g_ptr_array_add (orphans, g_strdup (key));
+    }
+    g_list_free (members);
+    g_hash_table_destroy (known);
+    return orphans;
+}
+
 static void
 zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
                        JsonArray *exposes, JsonArray *options)
 {
-    GPtrArray *bare = g_ptr_array_new ();
+    GPtrArray *settable = g_ptr_array_new ();   /* bare settable exposes */
+    GPtrArray *reported = g_ptr_array_new ();   /* bare report-only exposes */
+    GPtrArray *orphans;
     guint      n, i;
 
     /* Device page first. */
     zb_build_device_page (ctx, dev);
 
-    /* Settings page(s) from the bare (leaf, settable) top-level exposes,
-     * split by endpoint for a multi-gang device that surfaces them flat.  A
-     * composite expose (one carrying `features`) is the operational control
-     * (the on/off "switch" page) and is not shown here. */
+    /* Split the bare (leaf, non-composite) top-level exposes into the ones the
+     * user can change and the ones the device only reports.  A composite expose
+     * (one carrying `features`) is the operational control and is not shown
+     * here.  An access==2 leaf (a write-only action like identify) is settable
+     * and rides the Settings page as a trigger button. */
     if (exposes != NULL)
     {
         n = json_array_get_length (exposes);
@@ -2160,12 +2828,26 @@ zb_build_device_pages (ZbDevCtx *ctx, JsonObject *dev,
             if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
                 continue;
             exp = json_node_get_object (elem);
-            if (zb_object_array (exp, "features") == NULL)
-                g_ptr_array_add (bare, exp);
+            if (zb_object_array (exp, "features") != NULL)
+                continue;
+            if ((zb_expose_access (exp) & 2) != 0)
+                g_ptr_array_add (settable, exp);
+            else
+                g_ptr_array_add (reported, exp);
         }
     }
-    zb_build_bare_pages (ctx, bare);
-    g_ptr_array_unref (bare);
+
+    /* Settings page(s) from the settable bare exposes, split by endpoint. */
+    zb_build_bare_pages (ctx, settable);
+
+    /* One Reported-values page: the report-only exposes plus any reported state
+     * key with no expose at all (battery voltage on the leak sensor). */
+    orphans = zb_collect_orphan_keys (ctx, exposes);
+    zb_build_reported_page (ctx, reported, orphans);
+    g_ptr_array_unref (orphans);
+
+    g_ptr_array_unref (settable);
+    g_ptr_array_unref (reported);
 
     /* Options page last (device-level options + definition.options). */
     zb_build_options_page (ctx, dev, options);
@@ -2242,6 +2924,35 @@ zb_snapshot_baselines (ZbDevCtx *ctx)
     }
 }
 
+/* Give every enum that the seed pass left empty (no live value reported, no
+ * value_default) a visible "(unknown)" placeholder selected at row 0, instead
+ * of a blank combo that reads as a broken dialog.  The placeholder carries the
+ * empty id, so its baseline stays "" -- picking a real value diffs against it
+ * and publishes, leaving it untouched publishes nothing.  zb_seed_control_node
+ * drops the row the moment a real value arrives (item h / a /get reply).  Run
+ * after zb_snapshot_baselines so the baseline already reflects the empty
+ * combo. */
+static void
+zb_mark_unseeded_enums (ZbDevCtx *ctx)
+{
+    guint i;
+
+    for (i = 0; i < ctx->controls->len; i++)
+    {
+        ZbControl *c = g_ptr_array_index (ctx->controls, i);
+
+        if (c->kind != ZB_CTL_ENUM || c->placeholder)
+            continue;
+        if (gtk_combo_box_get_active (GTK_COMBO_BOX (c->widget)) >= 0)
+            continue;   /* a value seeded -- nothing to flag */
+
+        gtk_combo_box_text_insert (GTK_COMBO_BOX_TEXT (c->widget), 0, "",
+                                   "(unknown \xe2\x80\x94 set a value)");
+        gtk_combo_box_set_active (GTK_COMBO_BOX (c->widget), 0);
+        c->placeholder = TRUE;
+    }
+}
+
 /* A device row was clicked.  Tear down the previously-shown device pages,
  * resolve the clicked row back to its inventory record and stash its
  * friendly name + exposes/options for the page builder.  @row is borrowed;
@@ -2261,6 +2972,7 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
     /* (c) Drop the old device's pages before building the new one's. */
     zb_clear_device_pages (ctx);
     g_clear_pointer (&ctx->selected_name, g_free);
+    g_clear_pointer (&ctx->selected_id, g_free);
 
     /* (b) Resolve the row id (IEEE) back to its device record. */
     dev = zb_find_device (ctx, row->id);
@@ -2275,6 +2987,7 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
 
     fname = zb_peek_string (dev, "friendly_name");
     ctx->selected_name = g_strdup (fname != NULL ? fname : row->primary);
+    ctx->selected_id   = g_strdup (row->id);   /* stable key for re-select */
 
     exposes = zb_definition_array (dev, "exposes");
     options = zb_definition_array (dev, "options");
@@ -2286,6 +2999,17 @@ zb_on_device_selected (const PnDeviceRow *row, gpointer user_data)
     zb_build_device_pages (ctx, dev, exposes, options);
     zb_seed_controls (ctx);
     zb_snapshot_baselines (ctx);
+
+    /* Any enum still showing nothing (no live value, no default) gets a
+     * visible "(unknown)" row rather than a blank box, so the user sees the
+     * dialog could not read it -- it self-clears when a value arrives. */
+    zb_mark_unseeded_enums (ctx);
+
+    /* Ask the device to report everything readable now, so the Settings and
+     * Reported-values pages fill in on their own without the user pressing a
+     * refresh.  Event-only readings (a leak, a tamper) have no get endpoint and
+     * still arrive only when they happen. */
+    zb_request_all_gettable (ctx);
 
     n_exposes = (exposes != NULL) ? json_array_get_length (exposes) : 0;
     pn_device_dialog_set_statusf (
@@ -2510,7 +3234,7 @@ zb_on_join_clicked (GtkButton *button, gpointer user_data)
     if (ctx->sink == NULL)
     {
         pn_device_dialog_set_status (
-                ctx->shell, "Pick a broker and press Apply before pairing.");
+                ctx->shell, "Connect to a broker before pairing.");
         return;
     }
     if (ctx->join_dialog != NULL)       /* already open */
@@ -2664,8 +3388,8 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                                          "Messages received");
     pn_device_form_set_value (ctx->count_label, "0");
 
-    /* Apply, right-aligned under the value column. */
-    apply = gtk_button_new_with_label ("Apply");
+    /* Connect, right-aligned under the value column. */
+    apply = gtk_button_new_with_label ("Connect");
     gtk_widget_set_halign (apply, GTK_ALIGN_END);
     gtk_widget_set_margin_top (apply, 4);
     g_signal_connect (apply, "clicked",
@@ -2677,7 +3401,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                          "directly \xe2\x80\x94 their messages pass through a "
                          "small relay called an MQTT broker, rather like "
                          "letters through a post office. Choose which broker to "
-                         "connect to and press Apply; \"Default\" uses the one "
+                         "connect to and press Connect; \"Default\" uses the one "
                          "your system already set up, which is usually right. "
                          "Once connected, your devices appear in the list on "
                          "the left and the counter shows messages arriving.",
@@ -2734,7 +3458,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
             ctx->shell,
             "network-wireless-disabled",
             "No devices yet.",
-            "Pick a broker and press Apply.",
+            "Pick a broker and press Connect.",
             "dialog-question",
             "No devices reported.",
             "Is Zigbee2MQTT running and publishing bridge/devices?");
@@ -2744,7 +3468,7 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
 
     zb_populate_brokers (ctx);
     pn_device_dialog_set_status (ctx->shell,
-                                 "Pick an MQTT broker and press Apply.");
+                                 "Pick an MQTT broker and press Connect.");
 
     gtk_widget_show_all (gtk_dialog_get_content_area (GTK_DIALOG (dialog)));
     return dialog;
@@ -2782,6 +3506,8 @@ zb_dev_ctx_free (gpointer data)
     g_clear_pointer (&ctx->device_pages, g_ptr_array_unref);
     g_clear_pointer (&ctx->state, g_hash_table_unref);
     g_clear_pointer (&ctx->selected_name, g_free);
+    g_clear_pointer (&ctx->selected_id, g_free);
+    g_clear_pointer (&ctx->pending_reselect, g_free);
     g_free (ctx);
 }
 
