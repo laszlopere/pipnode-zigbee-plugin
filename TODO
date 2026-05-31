@@ -312,3 +312,62 @@ publish path; no second mosquitto client to hand-roll.
       the device's re-report repaints the control via the item-h path. The
       buttons line up flush-right across every row type since the value cell
       hexpands.
+
+
+----------------------------------------------------------------
+ Devices dialog: Connect/Disconnect toggle review findings
+ (2026-05-31)
+----------------------------------------------------------------
+
+Found by a multi-agent review of src/pn-zigbee-gui.c after the
+"make Connect a Connect/Disconnect toggle" commit. No memory-safety
+bugs (no leak / double-free / UAF; the owned combo active-text is
+freed, msg_handler is disconnected before unref, the combo "changed"
+guard correctly no-ops during programmatic populate). The items
+below are behavioral / contract issues the new disconnect path made
+reachable, plus reuse cleanups.
+
+10. Behavioral issues from the toggle.
+    a. Open join (pairing) window is left dangling on Disconnect /
+       broker-change. zb_reset_to_disconnected -> zb_drop_source
+       clears ctx->sink but never calls zb_join_finish, so the modal
+       countdown stays up, zb_join_tick -> zb_join_publish silently
+       no-ops (sink == NULL), the renewals stop AND the final
+       permit_join {value:false} close is never published -- the
+       coordinator can keep accepting devices for up to ~254 s after
+       the UI says "disconnected" (security-relevant, treat as the
+       priority fix). Fix: call zb_join_finish (ctx, TRUE) in the
+       teardown path BEFORE g_clear_object (&ctx->sink) so the close
+       actually goes out; zb_join_finish is idempotent and ctx-safe.
+    b. A connected-but-silent broker cannot be disconnected via the
+       button. ctx->connected is set TRUE only on the first publish
+       (zb_on_message, count==1), but zb_on_apply_clicked branches on
+       it: if the broker connects while Z2M never publishes (Z2M
+       down / empty topic tree), the button stays "Connect" and each
+       press silently re-runs zb_start_source (reconnect) instead of
+       tearing down -- the live session is undroppable from the
+       button. Fix: drive the button label/toggle off session
+       existence (ctx->source != NULL), keeping ctx->connected only
+       for the green Status bullet. zb_on_broker_changed already keys
+       on ctx->source != NULL; align the button with it.
+    c. Unguarded json_node_get_string at zb_build_action_row (~:1751)
+       on values[0] with no JSON_NODE_HOLDS_VALUE / string-type check
+       -- a non-string future payload logs a g_critical. Every other
+       consumer routes through the type-safe zb_json_to_display.
+       Harmless today (Z2M action values are always strings). Fix:
+       guard the type or reuse zb_json_to_display.
+    d. Reuse / simplification cleanups (no behavior change):
+       (1) 8 near-identical "if (ctx->sink == NULL) { set_status
+           ("Connect to a broker before <verb>."); return; }" guards
+           -> one zb_require_sink (ctx, "writing") helper.
+       (2) The ref_sink/destroy/unref "discard unparented widget"
+           triple is open-coded at 5 sites that could route through
+           the existing zb_discard_grid (rename to zb_discard_widget).
+       (3) The dim "unit suffix" label block is duplicated verbatim
+           in zb_build_expose_row and zb_add_int_control.
+       (4) Minor: grid row/col spacing 8/12 restated ~8x; status
+           colors #2ecc71 / #9e9e9e inline despite the file otherwise
+           #define-ing its constants.
+       (5) Stale comment (~:3948) claims a "nested main loop in
+           zb_on_join_clicked" that no longer exists (the join flow
+           was rewritten to be non-nested).
