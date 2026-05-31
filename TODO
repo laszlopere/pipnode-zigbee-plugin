@@ -2,71 +2,9 @@
  pipnode-zigbee-plugin -- TODO
 ================================================================
 
-Plain text only; no markdown. Level-0 items are numbered
-sequentially; their sub-items are lettered (a, b, c, ...).
-
-
-----------------------------------------------------------------
- Adopt pipnode's enhanced error-reporting / logging facilities
- (PLUGINS section 12)
-----------------------------------------------------------------
-
-The host now offers a three-channel failure-reporting contract
-that nodes are expected to use (all GTK-free, available headless):
-
-  - Downstream: emit a PnMessage with success=FALSE + a
-    human-readable output.
-  - Visual: pn_node_set_has_error (node, TRUE/FALSE)
-    (pn-node.h:708); the host paints the red body + warning glyph
-    itself. PLUGINS section 12 explicitly forbids hand-rolling
-    that swap via pn_node_set_color / pn_node_set_icon.
-  - Diagnostics log: pn_node_log() /
-    pn_node_log_info|warning|error() (pn-node.h:726-754) instead
-    of stdout/stderr or silent drops.
-
-Audit (2026-05-29): Channels 2 and 3 are now both done (items 1
-and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
-:247) is no longer the only node that logs.
-
-1. Channel 2 -- replace the hand-rolled red+glyph swap with
-   pn_node_set_has_error: DONE (2026-05-29).
-   a. DONE. The three zigbee swaps (pn-zigbee-switch.c,
-      pn-zigbee-relay-status.c, pn-zigbee-relay-command.c) likewise
-      keep magenta + toggle glyph and toggle has_error while
-      unconfigured (empty friendly-name). Decision: "unconfigured"
-      does count as a node-error state -- has_error is purely visual
-      in the host (no error aggregation / downstream side effect),
-      so the outcome is the identical red ❗ while complying with
-      section 12's ban on hand-rolled swaps. (pn-zigbee-remote.c
-      needs no migration: its friendly-name is an optional filter,
-      not a mandatory config, so it has no unconfigured-error state.)
-
-2. Channel 3 -- adopt pn_node_log_* for diagnostics: DONE
-   (2026-05-29).
-   Guiding rule applied: log a drop only where it is a genuine
-   diagnostic of bounded frequency. Drops on the broker-traffic
-   read path are deliberately left silent -- topic_matches_zigbee_
-   state matches the bare device topic zigbee2mqtt/<name>, on which
-   Z2M republishes every attribute (state, brightness, linkquality,
-   ...), so an absent "state" member is the routine case and would
-   flood the per-node log ring on every update.
-   a. DONE. src/pn-zigbee-source.c rebuild_device_cache -- a WARNING
-      when the bridge/devices payload is not a JSON array (and the
-      prior cache is now kept untouched on that path); plus one
-      aggregated WARNING ("skipped N entries with no usable
-      friendly_name") instead of per-element spam.
-   b. DONE. src/pn-zigbee-switch.c -- WARNING on the unconfigured
-      outbound fallback (user-toggle bounded); INFO on a present-but-
-      non-binary inbound state (e.g. "TOGGLE"). The state==NULL /
-      wrong-topic / unconfigured *read* drops stay silent (see rule).
-   c. DONE. src/pn-zigbee-relay-status.c -- INFO on a present-but-
-      non-binary inbound state, mirroring the switch. read-path
-      filtering drops stay silent.
-   d. DONE. src/pn-zigbee-relay-command.c -- WARNING when a
-      configured node gets an input with no usable numeric value
-      (upstream-emit bounded). The unconfigured drop stays silent
-      (the red error visual already flags it, and it would repeat on
-      every upstream emit).
+Plain text only; no markdown. Top-level items are written (N)
+and numbered sequentially; their sub-items are numbered N.1,
+N.2, ... (and deeper levels N.1.1, N.1.2, ...).
 
 
 ----------------------------------------------------------------
@@ -74,35 +12,35 @@ and 2 below). pn-zigbee-remote.c (pn_node_log_info per press,
  "Zigbee Switch"
 ----------------------------------------------------------------
 
-3. pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
-   Switch", but pn_node_get_class_name() on an instance returns
-   "Switch". The PnSwitch base seeds a *per-instance* class-name
-   label (the legacy override path), and the instance value shadows
-   the subclass's class-level value. The other nodes derive from
-   PnNode directly and are unaffected (they report their correct
-   class_name). Likely surfaced by commit 5fd9ad9, which dropped
-   the deprecated pn_node_set_class_name() calls from node init.
-   a. Decide whether the palette/inspector should show "Zigbee
-      Switch" (it should). If so, re-assert the per-instance label
-      in pn_zigbee_switch_init (the supported setter), or have the
-      host stop seeding an instance-level override from PnSwitch.
-      Caught by tests/test-zigbee-switch.c (which currently does
-      not assert class_name for this reason).
-   b. Update (2026-05-29): the host getter was already fixed for
-      this -- pipnode commit 97acd76 made pn_node_get_class_name()
-      fall back to the class-level PnNodeClass.class_name when there
-      is no per-instance override (lib/pn-node.c:889-898), and
-      deprecated pn_node_set_class_name() for plugin _init() use.
-      That alone does NOT fix us, though: PnSwitch's own
-      pn_switch_init still seeds a per-instance "Switch"
-      (lib/pn-switch.c:462) -- 97acd76 cleaned up pn_mqtt_init but
-      left pn-switch.c -- so the getter finds that non-empty
-      per-instance value and never reaches the new class-level
-      fallback. Decided fix: drop the pn_node_set_class_name (node,
-      "Switch") line at pn-switch.c:462 in pipnode (mirroring the
-      pn_mqtt_init cleanup); then PnZigbeeSwitch inherits "Zigbee
-      Switch" for free. To be done in pipnode later; once landed,
-      enable the class_name assertion in tests/test-zigbee-switch.c.
+(1) pn-zigbee-switch.c:405 pins node_class->class_name = "Zigbee
+    Switch", but pn_node_get_class_name() on an instance returns
+    "Switch". The PnSwitch base seeds a *per-instance* class-name
+    label (the legacy override path), and the instance value shadows
+    the subclass's class-level value. The other nodes derive from
+    PnNode directly and are unaffected (they report their correct
+    class_name). Likely surfaced by commit 5fd9ad9, which dropped
+    the deprecated pn_node_set_class_name() calls from node init.
+    1.1 Decide whether the palette/inspector should show "Zigbee
+        Switch" (it should). If so, re-assert the per-instance label
+        in pn_zigbee_switch_init (the supported setter), or have the
+        host stop seeding an instance-level override from PnSwitch.
+        Caught by tests/test-zigbee-switch.c (which currently does
+        not assert class_name for this reason).
+    1.2 Update (2026-05-29): the host getter was already fixed for
+        this -- pipnode commit 97acd76 made pn_node_get_class_name()
+        fall back to the class-level PnNodeClass.class_name when there
+        is no per-instance override (lib/pn-node.c:889-898), and
+        deprecated pn_node_set_class_name() for plugin _init() use.
+        That alone does NOT fix us, though: PnSwitch's own
+        pn_switch_init still seeds a per-instance "Switch"
+        (lib/pn-switch.c:462) -- 97acd76 cleaned up pn_mqtt_init but
+        left pn-switch.c -- so the getter finds that non-empty
+        per-instance value and never reaches the new class-level
+        fallback. Decided fix: drop the pn_node_set_class_name (node,
+        "Switch") line at pn-switch.c:462 in pipnode (mirroring the
+        pn_mqtt_init cleanup); then PnZigbeeSwitch inherits "Zigbee
+        Switch" for free. To be done in pipnode later; once landed,
+        enable the class_name assertion in tests/test-zigbee-switch.c.
 
 
 ----------------------------------------------------------------
@@ -114,204 +52,62 @@ memory-safety or registration bugs were found; ownership of
 JsonNode / GString / PnMessage is correct throughout. The items
 below are behavioral / contract issues.
 
-4. success flag: switch's configured vs unconfigured paths
-   disagree (minor).
-   data.success=FALSE is the section-12 downstream failure signal
-   -- i.e. "did the node do its job". These nodes only build and
-   emit a message (a downstream PnMqttSink does any actual
-   publishing; nothing touches hardware), so no property
-   combination can stop them emitting and success = TRUE is correct
-   by design. The configured paths (pn-zigbee-switch.c:156,
-   pn-zigbee-relay-command.c:190, pn-zigbee-relay-status.c:210) get
-   this right. The lone wrinkle: the base PnSwitch builder
-   overloads success to carry the latch state (success = on,
-   ../pipnode/.../pn-switch.c:124). That leaks into the Zigbee
-   switch *only* on the unconfigured fallback path
-   (pn-zigbee-switch.c:133-134), so within one node success means
-   "always true" when configured but "is-on" when not.
-   a. Optionally make the unconfigured fallback also stamp
-      success = TRUE for self-consistency. Low priority -- the
-      unconfigured case is a misconfiguration the warning visual
-      already flags, and success is correct on the path that
-      matters.
+(2) success flag: switch's configured vs unconfigured paths
+    disagree (minor).
+    data.success=FALSE is the section-12 downstream failure signal
+    -- i.e. "did the node do its job". These nodes only build and
+    emit a message (a downstream PnMqttSink does any actual
+    publishing; nothing touches hardware), so no property
+    combination can stop them emitting and success = TRUE is correct
+    by design. The configured paths (pn-zigbee-switch.c:156,
+    pn-zigbee-relay-command.c:190, pn-zigbee-relay-status.c:210) get
+    this right. The lone wrinkle: the base PnSwitch builder
+    overloads success to carry the latch state (success = on,
+    ../pipnode/.../pn-switch.c:124). That leaks into the Zigbee
+    switch *only* on the unconfigured fallback path
+    (pn-zigbee-switch.c:133-134), so within one node success means
+    "always true" when configured but "is-on" when not.
+    2.1 Optionally make the unconfigured fallback also stamp
+        success = TRUE for self-consistency. Low priority -- the
+        unconfigured case is a misconfiguration the warning visual
+        already flags, and success is correct on the path that
+        matters.
 
-5. PnZigbeeSource: malformed/empty bridge/devices is dropped and
-   leaves a stale cache.
-   src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
-   momentarily-[] inventory publish is swallowed (default
-   filter_bridge_devices=TRUE), the device cache is not refreshed,
-   and nothing is logged; the node then runs on stale device info
-   invisibly. (Deeper than the section-12 logging item for :590.)
-   a. Log a warning on the not-an-array / empty case, and consider
-      keeping the previous cache when the new array is empty.
+(3) PnZigbeeSource: malformed/empty bridge/devices is dropped and
+    leaves a stale cache.
+    src/pn-zigbee-source.c:731-737, :592-596 -- a garbage or
+    momentarily-[] inventory publish is swallowed (default
+    filter_bridge_devices=TRUE), the device cache is not refreshed,
+    and nothing is logged; the node then runs on stale device info
+    invisibly. (Deeper than the section-12 logging for :590.)
+    3.1 Log a warning on the not-an-array / empty case, and consider
+        keeping the previous cache when the new array is empty.
 
-6. Boolean Z2M state is silently dropped (switch & relay nodes).
-   src/pn-zigbee-relay-command.c:116-122,
-   src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
-   value/state readers accept only string / int64 / double, so Z2M
-   endpoints that express "state": true as a JSON boolean are
-   ignored. Consistent across the three, so a gap rather than a
-   divergence.
-   a. Optionally accept G_TYPE_BOOLEAN for state / value.
+(4) Boolean Z2M state is silently dropped (switch & relay nodes).
+    src/pn-zigbee-relay-command.c:116-122,
+    src/pn-zigbee-relay-status.c:146, src/pn-zigbee-switch.c:220 --
+    value/state readers accept only string / int64 / double, so Z2M
+    endpoints that express "state": true as a JSON boolean are
+    ignored. Consistent across the three, so a gap rather than a
+    divergence.
+    4.1 Optionally accept G_TYPE_BOOLEAN for state / value.
 
-7. PnZigbeeRelayStatus leaves the live device state topic on its
-   emitted message.
-   src/pn-zigbee-relay-status.c:204-218 -- never calls
-   pn_message_set_topic, unlike relay-command which rewrites it
-   (:166-168). Wiring relay-status to an MQTT Sink that republishes
-   on the inbound topic would echo onto the device's state topic.
-   Latent foot-gun.
-   a. Clear the topic on the emitted message, or document why it's
-      left intact.
+(5) PnZigbeeRelayStatus leaves the live device state topic on its
+    emitted message.
+    src/pn-zigbee-relay-status.c:204-218 -- never calls
+    pn_message_set_topic, unlike relay-command which rewrites it
+    (:166-168). Wiring relay-status to an MQTT Sink that republishes
+    on the inbound topic would echo onto the device's state topic.
+    Latent foot-gun.
+    5.1 Clear the topic on the emitted message, or document why it's
+        left intact.
 
-8. Test-coverage gaps (not bugs).
-   a. PnZigbeeSource has zero unit tests -- its Z2M filter/inject
-      logic (the most complex code in the plugin) is uncovered
-      because constructing it auto-connects libmosquitto
-      off-thread. Worth an integration test against a throwaway
-      broker.
-
-
-----------------------------------------------------------------
- Devices dialog: edit the selected device's settings on the
- right-hand notebook
-----------------------------------------------------------------
-
-Goal: clicking a device in the left-hand list
-(zb_on_device_selected in src/pn-zigbee-gui.c, which currently
-only echoes name + IEEE to the status bar) populates the
-right-hand notebook with that device's settings -- one or more
-pages, every setting shown and, where Z2M marks it settable,
-editable -- and writes changes back to the device.
-
-Data already in hand:
-  - The device record + its definition.exposes / definition.options
-    tree, from the stored bridge/devices inventory (ctx->devices).
-  - Live current values: the retained per-device state topic
-    zigbee2mqtt/<friendly_name> (a JSON object of property -> value).
-    The hidden source already receives it on the zigbee2mqtt/#
-    subscription, but the dialog does not yet capture it.
-
-Write-back channel (verified, pn-mqtt-sink.h): a hidden PnMqttSink
-(pn_mqtt_sink_new) bound to the same broker PUBLISHes one MQTT
-message per inbound PnMessage -- topic = the message's envelope
-topic, payload = data.payload as JSON. So building a PnMessage with
-topic zigbee2mqtt/<name>/set and data.payload {property: value} and
-handing it to the sink (pn_node_receive_message) is the supported
-publish path; no second mosquitto client to hand-roll.
-
-9. Build editable per-device settings pages from the exposes tree.
-   a. Capture live state. DONE (2026-05-30). zb_capture_state stores a
-      json_node_copy of every bare zigbee2mqtt/<friendly_name> payload
-      (prefix-matched, no further '/') in a friendly_name -> JsonNode
-      object map (ctx->state). The "push into the live controls when it
-      is the shown device" half waits on the controls themselves (items
-      f/h) -- a seam comment marks the spot.
-   b. Resolve the selected device. DONE (2026-05-30). zb_on_device_
-      selected resolves the row id (IEEE, friendly-name fallback) back to
-      its record via zb_find_device, reads definition.exposes/options via
-      zb_definition_array, and stashes ctx->selected_name. For now it
-      reports the expose count + options presence to the status bar; item
-      d turns those exposes into pages.
-   c. Clear old pages. DONE (2026-05-30). zb_clear_device_pages drops the
-      tracked dynamic pages (ctx->device_pages) from the notebook, keeping
-      the static "Broker" page, and is called on re-select, on Apply/Reload
-      (zb_start_source) and -- container-only, the dialog tears the widgets
-      down -- on close (zb_dev_ctx_free). Per-control binding teardown is
-      noted for item e.
-   d. Walk the exposes tree into pages/sections. DONE (2026-05-30).
-      zb_build_device_pages walks ctx's selected exposes: every top-level
-      expose carrying a `features` array (the typed switch/light/cover/…
-      and "composite") becomes its own page via zb_build_composite_page;
-      the bare top-level exposes collect under one "Settings" page. Rows
-      are built with pn_device_form_new_tab + _add_section + a GtkGrid,
-      the same house-style helpers the Broker page uses, and the new pages
-      are tracked in ctx->device_pages (so item c tears them down). A
-      `list` expose has no `features`, so it falls through to the leaf
-      path and surfaces as a read-only raw-JSON row rather than being
-      mis-rendered; nested composite *features* recurse into sub-sections
-      (zb_add_features_section). Per-endpoint grouping stays item j.
-   e. Map each expose to a widget by `type`, honouring `access`. DONE
-      (2026-05-30). zb_build_expose_row keys off access bit 2: a settable
-      binary -> GtkSwitch (value_on/value_off captured for the bool/string
-      mapping), numeric -> PnDeviceSpin seeded with value_min/max/step and
-      digits derived from the step, with `unit` as a dim suffix label;
-      enum -> PnDeviceCombo filled from `values`; text -> GtkEntry. A
-      non-settable expose -- and a settable one of an unknown type -- gets
-      a read-only value row (pn_device_form_attach_label_row), so a newer
-      Z2M type surfaces rather than vanishing. The JSON key resolves from
-      `property` (else `name`); an `endpoint` is appended only when not
-      already baked in, so a two-gang "state_left" is not doubled. label
-      from label/name/property/type, tooltip from `description`. Each
-      control is tracked as a ZbControl (key + kind + widget) for f/g/h.
-   f. Seed current values. DONE (2026-05-30). zb_seed_controls fills every
-      tracked control from the captured zigbee2mqtt/<name> state object by
-      its resolved key (switch active, spin value, combo active-id, entry
-      text, read-only label), leaving the build default / "—" placeholder
-      when the key is absent. Called right after the page build on select;
-      the live-repaint-on-new-state half is item h.
-   g. Apply / write-back. DONE (2026-05-30). A hidden PnMqttSink
-      (pn_mqtt_sink_new) is created in zb_start_source and dropped in
-      zb_drop_source against the same broker-profile as the source, with
-      retain=FALSE (a "<name>/set" command must not be retained). Each
-      settable page carries its own borrowed control list and a bottom
-      "Settings"-style Apply button (zb_add_page_apply); on click
-      zb_publish_changes collects the controls whose value differs from a
-      per-control baseline into a JsonObject (binary -> value_on/off string
-      or JSON bool; numeric -> int/double per the spin's digits; enum ->
-      selected id; text -> raw), builds a PnMessage (topic
-      zigbee2mqtt/<friendly_name>/set, data.payload = that object) and hands
-      it to the sink via pn_node_receive_message. Baselines are snapshotted
-      after the seed (zb_snapshot_baselines) and re-adopted on a successful
-      Apply, so a second press resends nothing; "no changes" is reported,
-      not published. (The applied value is the baseline until item h
-      repaints from the device's confirmed re-publish.)
-   h. Reflect confirmed state. DONE (2026-05-30). zb_capture_state, after
-      storing a bare zigbee2mqtt/<name> publish, calls zb_seed_controls
-      when <name> is the shown device -- the same painter item f uses, now
-      shared. It repaints each control whose key is in the fresh state and
-      re-anchors that control's baseline to the painted value, so a value
-      the device clamped/rejected after an Apply shows through (and the
-      next Apply diffs against the device's truth, not what was typed).
-      Z2M's bare-topic re-publish carries the full state, so a periodic
-      report repaints everything, including an in-progress un-applied edit
-      -- accepted by design here (the device's confirmed value wins); keys
-      absent from the payload, and any pending edit on them, are untouched.
-      Runs on the main thread (PnMqtt marshals PUBLISHes there), so the
-      GTK writes are safe.
-   i. Lifecycle / edge cases. DONE (2026-05-30). When the exposes walk
-      builds no page (no definition -- the Coordinator -- or empty
-      exposes), zb_build_identity_page adds a read-only "Info" page with
-      the addressing/vendor fields straight off the inventory record, so
-      the pane is never blank. definition.options gets its own read-only
-      "Options" page (zb_build_options_page) showing each option's
-      label/description/default -- read-only on purpose, since Z2M device
-      options are set through the bridge request API, not the "<name>/set"
-      path the editable pages use, so wiring them to the page Apply would
-      write to the wrong place. Both pages are tracked in ctx->device_pages,
-      so switching devices / pressing Reload tears them down and rebuilds
-      cleanly (zb_clear_device_pages, zb_start_source), and closing frees
-      the state map and the sink (zb_dev_ctx_free -> g_hash_table_unref +
-      zb_drop_source) -- all already in place from a-c/g.
-   j. Optional polish. DONE (2026-05-30). Three independent touches:
-      (1) Endpoint-aware pages. zb_page_title appends a composite expose's
-      `endpoint` to its tab ("Switch (left)") when not already in the
-      label, so a multi-gang device's identically-typed gangs get distinct
-      tabs; zb_build_bare_pages groups the bare top-level exposes by
-      `endpoint` into per-endpoint "Settings (<ep>)" pages (first-seen
-      order, shared "" group for endpoint-less ones), falling back to the
-      single plain "Settings" page when there is only one group -- the
-      common single-endpoint device is unchanged. (2) Numeric presets.
-      zb_add_numeric_presets adds a "Preset…" combo beside a numeric spin
-      built from the expose's `presets` ({name,value}); picking a row drives
-      the spin and snaps back to the placeholder, so it is a write-only
-      shortcut that never fights the seeded live value. (3) Per-control get.
-      A gettable expose (access bit 4) gets a flat refresh button in its own
-      grid column 2 (zb_make_get_button) that publishes {"<key>":""} to
-      zigbee2mqtt/<name>/get through the same hidden sink (zb_publish_get);
-      the device's re-report repaints the control via the item-h path. The
-      buttons line up flush-right across every row type since the value cell
-      hexpands.
+(6) Test-coverage gaps (not bugs).
+    6.1 PnZigbeeSource has zero unit tests -- its Z2M filter/inject
+        logic (the most complex code in the plugin) is uncovered
+        because constructing it auto-connects libmosquitto
+        off-thread. Worth an integration test against a throwaway
+        broker.
 
 
 ----------------------------------------------------------------
@@ -327,47 +123,47 @@ guard correctly no-ops during programmatic populate). The items
 below are behavioral / contract issues the new disconnect path made
 reachable, plus reuse cleanups.
 
-10. Behavioral issues from the toggle.
-    a. Open join (pairing) window is left dangling on Disconnect /
-       broker-change. zb_reset_to_disconnected -> zb_drop_source
-       clears ctx->sink but never calls zb_join_finish, so the modal
-       countdown stays up, zb_join_tick -> zb_join_publish silently
-       no-ops (sink == NULL), the renewals stop AND the final
-       permit_join {value:false} close is never published -- the
-       coordinator can keep accepting devices for up to ~254 s after
-       the UI says "disconnected" (security-relevant, treat as the
-       priority fix). Fix: call zb_join_finish (ctx, TRUE) in the
-       teardown path BEFORE g_clear_object (&ctx->sink) so the close
-       actually goes out; zb_join_finish is idempotent and ctx-safe.
-    b. A connected-but-silent broker cannot be disconnected via the
-       button. ctx->connected is set TRUE only on the first publish
-       (zb_on_message, count==1), but zb_on_apply_clicked branches on
-       it: if the broker connects while Z2M never publishes (Z2M
-       down / empty topic tree), the button stays "Connect" and each
-       press silently re-runs zb_start_source (reconnect) instead of
-       tearing down -- the live session is undroppable from the
-       button. Fix: drive the button label/toggle off session
-       existence (ctx->source != NULL), keeping ctx->connected only
-       for the green Status bullet. zb_on_broker_changed already keys
-       on ctx->source != NULL; align the button with it.
-    c. Unguarded json_node_get_string at zb_build_action_row (~:1751)
-       on values[0] with no JSON_NODE_HOLDS_VALUE / string-type check
-       -- a non-string future payload logs a g_critical. Every other
-       consumer routes through the type-safe zb_json_to_display.
-       Harmless today (Z2M action values are always strings). Fix:
-       guard the type or reuse zb_json_to_display.
-    d. Reuse / simplification cleanups (no behavior change):
-       (1) 8 near-identical "if (ctx->sink == NULL) { set_status
-           ("Connect to a broker before <verb>."); return; }" guards
-           -> one zb_require_sink (ctx, "writing") helper.
-       (2) The ref_sink/destroy/unref "discard unparented widget"
-           triple is open-coded at 5 sites that could route through
-           the existing zb_discard_grid (rename to zb_discard_widget).
-       (3) The dim "unit suffix" label block is duplicated verbatim
-           in zb_build_expose_row and zb_add_int_control.
-       (4) Minor: grid row/col spacing 8/12 restated ~8x; status
-           colors #2ecc71 / #9e9e9e inline despite the file otherwise
-           #define-ing its constants.
-       (5) Stale comment (~:3948) claims a "nested main loop in
-           zb_on_join_clicked" that no longer exists (the join flow
-           was rewritten to be non-nested).
+(7) Behavioral issues from the toggle.
+    7.1 Open join (pairing) window is left dangling on Disconnect /
+        broker-change. zb_reset_to_disconnected -> zb_drop_source
+        clears ctx->sink but never calls zb_join_finish, so the modal
+        countdown stays up, zb_join_tick -> zb_join_publish silently
+        no-ops (sink == NULL), the renewals stop AND the final
+        permit_join {value:false} close is never published -- the
+        coordinator can keep accepting devices for up to ~254 s after
+        the UI says "disconnected" (security-relevant, treat as the
+        priority fix). Fix: call zb_join_finish (ctx, TRUE) in the
+        teardown path BEFORE g_clear_object (&ctx->sink) so the close
+        actually goes out; zb_join_finish is idempotent and ctx-safe.
+    7.2 A connected-but-silent broker cannot be disconnected via the
+        button. ctx->connected is set TRUE only on the first publish
+        (zb_on_message, count==1), but zb_on_apply_clicked branches on
+        it: if the broker connects while Z2M never publishes (Z2M
+        down / empty topic tree), the button stays "Connect" and each
+        press silently re-runs zb_start_source (reconnect) instead of
+        tearing down -- the live session is undroppable from the
+        button. Fix: drive the button label/toggle off session
+        existence (ctx->source != NULL), keeping ctx->connected only
+        for the green Status bullet. zb_on_broker_changed already keys
+        on ctx->source != NULL; align the button with it.
+    7.3 Unguarded json_node_get_string at zb_build_action_row (~:1751)
+        on values[0] with no JSON_NODE_HOLDS_VALUE / string-type check
+        -- a non-string future payload logs a g_critical. Every other
+        consumer routes through the type-safe zb_json_to_display.
+        Harmless today (Z2M action values are always strings). Fix:
+        guard the type or reuse zb_json_to_display.
+    7.4 Reuse / simplification cleanups (no behavior change):
+        7.4.1 8 near-identical "if (ctx->sink == NULL) { set_status
+              ("Connect to a broker before <verb>."); return; }" guards
+              -> one zb_require_sink (ctx, "writing") helper.
+        7.4.2 The ref_sink/destroy/unref "discard unparented widget"
+              triple is open-coded at 5 sites that could route through
+              the existing zb_discard_grid (rename to zb_discard_widget).
+        7.4.3 The dim "unit suffix" label block is duplicated verbatim
+              in zb_build_expose_row and zb_add_int_control.
+        7.4.4 Minor: grid row/col spacing 8/12 restated ~8x; status
+              colors #2ecc71 / #9e9e9e inline despite the file otherwise
+              #define-ing its constants.
+        7.4.5 Stale comment (~:3948) claims a "nested main loop in
+              zb_on_join_clicked" that no longer exists (the join flow
+              was rewritten to be non-nested).
