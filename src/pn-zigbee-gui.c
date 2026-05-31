@@ -189,6 +189,22 @@ typedef struct
     GtkComboBoxText *broker_combo;
     GtkLabel        *count_label;
 
+    /* Connected-state readout on the Broker page (all borrowed; the static
+     * page owns them, so they live for the dialog's lifetime).  conn_status
+     * flips "Not connected" -> "Connected" on the first publish after a
+     * (re)connect.  The version rows share the Broker grid (so their key /
+     * value columns line up with Status, Messages received, …) and are kept
+     * hidden until bridge/info arrives -- a hidden grid row collapses to zero
+     * height.  info_widgets holds those rows' key+value widgets (borrowed) so
+     * zb_refresh_broker_info can toggle the block as a unit. */
+    GtkLabel        *conn_status;
+    GPtrArray       *info_widgets;
+    GtkLabel        *info_broker;       /* config.mqtt.server (broker URL)   */
+    GtkLabel        *info_protocol;     /* config.mqtt.version -> 3.1/3.1.1/5 */
+    GtkLabel        *info_z2m;          /* version (+ commit)                */
+    GtkLabel        *info_coordinator;  /* coordinator.type . rev meta.rev   */
+    GtkLabel        *info_herdsman;     /* zigbee_herdsman.version           */
+
     /* The hidden MQTT Source.  NULL until the first Apply; re-created on
      * every Apply.  Owned -- released with g_object_unref. */
     PnMqtt          *source;
@@ -216,6 +232,13 @@ typedef struct
      * appear in the state topic and have no /get.  NULL until the first
      * bridge/info arrives. */
     JsonNode        *config;
+
+    /* Deep copy of the WHOLE latest bridge/info payload (config plus its
+     * siblings: version, commit, coordinator, zigbee_herdsman, …).  config
+     * above is the sub-object the option seeding needs; this keeps the rest
+     * so the Broker page can show the Zigbee2MQTT / coordinator / broker
+     * versions.  NULL until the first bridge/info arrives. */
+    JsonNode        *info;
 
     /* Live per-device state: friendly_name (owned gchar*) -> a deep copy
      * of the latest retained zigbee2mqtt/<friendly_name> payload (owned
@@ -314,6 +337,13 @@ static void zb_seed_bridge_config (ZbDevCtx *ctx);
  * Firmware section's status/progress from the device state's `update` object
  * (zb_capture_state) and from an ota_update response (zb_report_response). */
 static void zb_refresh_firmware (ZbDevCtx *ctx);
+
+/* Flip the Broker page's "Status" indicator, and repaint its hidden version
+ * rows from the captured bridge/info (revealing them once it has arrived).
+ * Both defined in the Broker-page section below; the message handler calls
+ * them as the connection comes up and bridge/info lands. */
+static void zb_set_connected     (ZbDevCtx *ctx, gboolean connected);
+static void zb_refresh_broker_info (ZbDevCtx *ctx);
 
 /* Defined in the pairing section below; the inventory handler
  * (zb_ingest_devices) calls it to refresh the open join dialog's joined
@@ -656,6 +686,13 @@ zb_ingest_bridge_config (ZbDevCtx *ctx, PnMessage *message)
     if (payload == NULL || !JSON_NODE_HOLDS_OBJECT (payload))
         return;
     info = json_node_get_object (payload);
+
+    /* Keep the whole payload so the Broker page can show the Zigbee2MQTT /
+     * coordinator / broker versions, then repaint that readout. */
+    g_clear_pointer (&ctx->info, json_node_unref);
+    ctx->info = json_node_copy (payload);
+    zb_refresh_broker_info (ctx);
+
     if (!json_object_has_member (info, "config"))
         return;
     config = json_object_get_member (info, "config");
@@ -769,6 +806,11 @@ zb_on_message (PnMqtt *source, PnMessage *message, gpointer user_data)
     pn_device_form_set_value (ctx->count_label, text);
     g_free (text);
 
+    /* The first publish after a (re)connect proves the broker link is up --
+     * flip the Status indicator the moment data starts flowing. */
+    if (ctx->count == 1)
+        zb_set_connected (ctx, TRUE);
+
     topic = pn_message_get_topic (message);
     if (g_strcmp0 (topic, ZB_DEV_DEVICES_TOPIC) == 0)
         zb_ingest_devices (ctx, message);
@@ -802,7 +844,13 @@ zb_start_source (ZbDevCtx *ctx)
     pn_device_form_set_value (ctx->count_label, "0");
     g_clear_pointer (&ctx->devices, json_node_unref);
     g_clear_pointer (&ctx->config, json_node_unref);
+    g_clear_pointer (&ctx->info, json_node_unref);
     pn_device_dialog_set_device_rows (ctx->shell, NULL);   /* clear list */
+
+    /* Back to square one: "Not connected", and hide the version rows until a
+     * fresh bridge/info repopulates them. */
+    zb_set_connected (ctx, FALSE);
+    zb_refresh_broker_info (ctx);
 
     /* The inventory and live state replay on reconnect; drop the stale
      * selection, its pages and the per-device state so nothing carries
@@ -3509,6 +3557,132 @@ zb_populate_brokers (ZbDevCtx *ctx)
     gtk_combo_box_set_active (GTK_COMBO_BOX (ctx->broker_combo), 0);
 }
 
+/* Repaint the Broker page's "Status" indicator: a coloured bullet plus a
+ * word, green when a publish has been seen, grey otherwise. */
+static void
+zb_set_connected (ZbDevCtx *ctx, gboolean connected)
+{
+    if (ctx->conn_status == NULL)
+        return;
+
+    gtk_label_set_markup (
+        ctx->conn_status,
+        connected
+            ? "<span foreground=\"#2ecc71\">\xe2\x97\x8f</span> Connected"
+            : "<span foreground=\"#9e9e9e\">\xe2\x97\x8f</span> Not connected");
+}
+
+/* Attach a version row to @grid at @row, sharing its key/value columns with the
+ * rest of the Broker grid, and remember both widgets in ctx->info_widgets so
+ * the whole block can be shown/hidden as a unit.  Returns the value label. */
+static GtkLabel *
+zb_attach_info_row (ZbDevCtx *ctx, GtkGrid *grid, gint row, const gchar *key)
+{
+    GtkLabel  *val = pn_device_form_attach_label_row (grid, row, key);
+    GtkWidget *k   = gtk_grid_get_child_at (grid, 0, row);
+
+    if (k != NULL)
+        g_ptr_array_add (ctx->info_widgets, k);
+    g_ptr_array_add (ctx->info_widgets, GTK_WIDGET (val));
+    return val;
+}
+
+/* Show or hide the version rows as a unit (a hidden grid row collapses, so the
+ * Connect button below slides up against "Messages received" when hidden). */
+static void
+zb_show_broker_info (ZbDevCtx *ctx, gboolean show)
+{
+    guint i;
+
+    if (ctx->info_widgets == NULL)
+        return;
+    for (i = 0; i < ctx->info_widgets->len; i++)
+        gtk_widget_set_visible (g_ptr_array_index (ctx->info_widgets, i), show);
+}
+
+/* Fill the Broker page's version rows from the captured bridge/info and reveal
+ * them; with no bridge/info yet (fresh dialog or just-reconnected), keep them
+ * hidden so the section shows only the picker + Connect.  The broker URL and
+ * negotiated MQTT protocol come from config.mqtt; the Zigbee2MQTT, coordinator
+ * and zigbee-herdsman versions from the payload's top level.  Any field Z2M
+ * omits falls back to the "—" placeholder. */
+static void
+zb_refresh_broker_info (ZbDevCtx *ctx)
+{
+    JsonObject  *info, *config, *mqtt, *coord, *meta, *herds;
+    const gchar *server, *z2m, *commit, *ctype;
+    gchar       *protocol = NULL, *z2m_full = NULL, *coord_full = NULL;
+    gchar       *proto_raw = NULL, *rev = NULL;
+
+    if (ctx->info_widgets == NULL)
+        return;
+
+    if (ctx->info == NULL || !JSON_NODE_HOLDS_OBJECT (ctx->info))
+    {
+        zb_show_broker_info (ctx, FALSE);
+        return;
+    }
+    info = json_node_get_object (ctx->info);
+
+    /* Broker URL + protocol: config.mqtt.{server,version}.  version is the
+     * MQTT protocol level (3 = 3.1, 4 = 3.1.1, 5 = 5.0), not a build number. */
+    config = zb_peek_object (info, "config");
+    mqtt   = (config != NULL) ? zb_peek_object (config, "mqtt") : NULL;
+    server = zb_peek_string (mqtt, "server");
+
+    proto_raw = zb_peek_display (mqtt, "version");
+    if (proto_raw != NULL && *proto_raw != '\0')
+    {
+        if (g_strcmp0 (proto_raw, "5") == 0)
+            protocol = g_strdup ("5.0");
+        else if (g_strcmp0 (proto_raw, "4") == 0)
+            protocol = g_strdup ("3.1.1");
+        else if (g_strcmp0 (proto_raw, "3") == 0)
+            protocol = g_strdup ("3.1");
+        else
+            protocol = g_strdup (proto_raw);
+    }
+
+    /* Zigbee2MQTT version (+ short commit, when published). */
+    z2m    = zb_peek_string (info, "version");
+    commit = zb_peek_string (info, "commit");
+    if (z2m != NULL)
+        z2m_full = (commit != NULL)
+            ? g_strdup_printf ("%s (commit %s)", z2m, commit)
+            : g_strdup (z2m);
+
+    /* Coordinator: its radio type and, when present, the firmware revision. */
+    coord = zb_peek_object (info, "coordinator");
+    ctype = zb_peek_string (coord, "type");
+    meta  = zb_peek_object (coord, "meta");
+    rev   = zb_peek_display (meta, "revision");
+    if (rev != NULL && *rev == '\0')
+        g_clear_pointer (&rev, g_free);
+    if (ctype != NULL && rev != NULL)
+        coord_full = g_strdup_printf ("%s \xc2\xb7 rev %s", ctype, rev);
+    else if (ctype != NULL)
+        coord_full = g_strdup (ctype);
+    else if (rev != NULL)
+        coord_full = g_strdup_printf ("rev %s", rev);
+
+    herds = zb_peek_object (info, "zigbee_herdsman");
+
+    pn_device_form_set_value (ctx->info_broker,      server);
+    pn_device_form_set_value (ctx->info_protocol,    protocol);
+    pn_device_form_set_value (ctx->info_z2m,         z2m_full);
+    pn_device_form_set_value (ctx->info_coordinator, coord_full);
+    pn_device_form_set_value (ctx->info_herdsman,
+                              zb_peek_string (herds, "version"));
+
+    zb_show_broker_info (ctx, TRUE);
+
+    g_free (proto_raw);
+    g_free (protocol);
+    g_free (z2m_full);
+    g_free (coord_full);
+    g_free (rev);
+}
+
 static GtkWidget *
 zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
 {
@@ -3519,12 +3693,13 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
     GtkWidget *combo;
     GtkWidget *apply;
     GtkWidget *cell;
-    gint       row = 0;
+    gint       row  = 0;
 
     ctx->state = g_hash_table_new_full (g_str_hash, g_str_equal,
                                         g_free, (GDestroyNotify) json_node_unref);
     ctx->device_pages = g_ptr_array_new ();
     ctx->controls     = g_ptr_array_new_with_free_func (zb_control_free);
+    ctx->info_widgets = g_ptr_array_new ();   /* borrowed row widgets */
 
     ctx->shell = pn_device_dialog_new (parent, "Zigbee Devices",
                                        PN_DEVICE_DIALOG_WITH_DEVICE_LIST);
@@ -3547,16 +3722,35 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
             "mqtt-broker profile.");
     gtk_box_pack_start (GTK_BOX (cell), combo, TRUE, TRUE, 0);
 
+    /* "Status" | connection indicator (grey until the first publish). */
+    ctx->conn_status =
+        pn_device_form_attach_label_row (GTK_GRID (grid), row++, "Status");
+
     /* "Messages received" | live count (the right-side label). */
     ctx->count_label =
         pn_device_form_attach_label_row (GTK_GRID (grid), row++,
                                          "Messages received");
     pn_device_form_set_value (ctx->count_label, "0");
 
-    /* Connect, right-aligned under the value column. */
+    /* Version readout, in the same grid so its key / value columns line up with
+     * the rows above.  Revealed once bridge/info arrives (zb_refresh_broker_info
+     * fills it and toggles the rows): the broker URL + negotiated MQTT protocol,
+     * then the Zigbee2MQTT, coordinator and zigbee-herdsman versions. */
+    ctx->info_broker      = zb_attach_info_row (ctx, GTK_GRID (grid), row++,
+                                                "Broker URL");
+    ctx->info_protocol    = zb_attach_info_row (ctx, GTK_GRID (grid), row++,
+                                                "MQTT protocol");
+    ctx->info_z2m         = zb_attach_info_row (ctx, GTK_GRID (grid), row++,
+                                                "Zigbee2MQTT");
+    ctx->info_coordinator = zb_attach_info_row (ctx, GTK_GRID (grid), row++,
+                                                "Coordinator");
+    ctx->info_herdsman    = zb_attach_info_row (ctx, GTK_GRID (grid), row++,
+                                                "zigbee-herdsman");
+
+    /* Connect, right-aligned under the value column, beneath the readout. */
     apply = gtk_button_new_with_label ("Connect");
     gtk_widget_set_halign (apply, GTK_ALIGN_END);
-    gtk_widget_set_margin_top (apply, 4);
+    gtk_widget_set_margin_top (apply, 8);
     g_signal_connect (apply, "clicked",
                       G_CALLBACK (zb_on_apply_clicked), ctx);
     gtk_grid_attach (GTK_GRID (grid), apply, 1, row++, 1, 1);
@@ -3569,7 +3763,8 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                          "connect to and press Connect; \"Default\" uses the one "
                          "your system already set up, which is usually right. "
                          "Once connected, your devices appear in the list on "
-                         "the left and the counter shows messages arriving.",
+                         "the left and the counter shows messages arriving, "
+                         "along with the broker and Zigbee2MQTT versions.",
                          grid);
 
     /* Join-window section: opens a 5-minute pairing window on the
@@ -3636,6 +3831,13 @@ zb_build_dialog (GtkWindow *parent, ZbDevCtx *ctx)
                                  "Pick an MQTT broker and press Connect.");
 
     gtk_widget_show_all (gtk_dialog_get_content_area (GTK_DIALOG (dialog)));
+
+    /* Initial readout: "Not connected", version rows hidden until bridge/info.
+     * Run after show_all so the hide sticks (show_all made the rows visible
+     * individually; hiding the grid now keeps them ready for a later reveal). */
+    zb_set_connected (ctx, FALSE);
+    zb_refresh_broker_info (ctx);
+
     return dialog;
 }
 
@@ -3665,11 +3867,13 @@ zb_dev_ctx_free (gpointer data)
     zb_drop_source (ctx);
     g_clear_pointer (&ctx->devices, json_node_unref);
     g_clear_pointer (&ctx->config, json_node_unref);
+    g_clear_pointer (&ctx->info, json_node_unref);
 
     /* Shell already cleared, so the pages are torn down by the dialog
      * itself -- just free our tracking containers and the state map. */
     g_clear_pointer (&ctx->controls, g_ptr_array_unref);
     g_clear_pointer (&ctx->device_pages, g_ptr_array_unref);
+    g_clear_pointer (&ctx->info_widgets, g_ptr_array_unref);
     g_clear_pointer (&ctx->state, g_hash_table_unref);
     g_clear_pointer (&ctx->selected_name, g_free);
     g_clear_pointer (&ctx->selected_id, g_free);
