@@ -681,17 +681,23 @@ merge_object_members (
  *  (json_node_copy is a genuine deep copy here; a later downstream
  *  rewrite of the forwarded message cannot leak back into the snapshot).
  *
- *  A wrong-shaped payload is logged and the previous snapshot kept,
- *  mirroring rebuild_device_cache's malformed-publish handling (PLUGINS
- *  §12, channel 3): a momentary garbage publish must not blank a good
+ *  A wrong-shaped payload keeps the previous snapshot, mirroring
+ *  rebuild_device_cache's malformed-publish handling (PLUGINS §12,
+ *  channel 3): a momentary garbage publish must not blank a good
  *  inventory.  @want_array selects the expected top-level shape
- *  (bridge/devices is an array, bridge/definitions an object). */
+ *  (bridge/devices is an array, bridge/definitions an object).
+ *
+ *  @warn_on_malformed gates the warning so one bad publish yields one
+ *  log line, not two: on bridge/devices rebuild_device_cache already
+ *  warns about the very same payload, so the caller passes FALSE there
+ *  and TRUE for bridge/definitions, which has no such sibling warner. */
 static void
 retain_bridge_payload (
         PnZigbeeSource *self,
         JsonNode      **slot,
         PnMessage      *message,
         gboolean        want_array,
+        gboolean        warn_on_malformed,
         const gchar    *what)
 {
     JsonNode *payload_node = pn_message_get_member (message, "payload");
@@ -706,10 +712,11 @@ retain_bridge_payload (
 
     if (!ok)
     {
-        pn_node_log_warning (PN_NODE (self),
-                             "bridge/%s payload has unexpected shape; "
-                             "ignoring (retained snapshot unchanged)",
-                             what);
+        if (warn_on_malformed)
+            pn_node_log_warning (PN_NODE (self),
+                                 "bridge/%s payload has unexpected shape; "
+                                 "ignoring (retained snapshot unchanged)",
+                                 what);
         return;
     }
 
@@ -1071,7 +1078,7 @@ pn_zigbee_source_process_message (
     if (strcmp (topic, PN_ZIGBEE_DEVICES_TOPIC) == 0)
     {
         retain_bridge_payload (self, &self->devices, message, TRUE,
-                               "devices");
+                               FALSE, "devices");
         rebuild_device_cache (self, message);
         if (self->filter_bridge_devices)
             return FALSE;
@@ -1086,7 +1093,7 @@ pn_zigbee_source_process_message (
     if (strcmp (topic, PN_ZIGBEE_DEFINITIONS_TOPIC) == 0)
     {
         retain_bridge_payload (self, &self->definitions, message, FALSE,
-                               "definitions");
+                               TRUE, "definitions");
         if (self->filter_bridge_definitions)
             return FALSE;
         return pn_mqtt_real_process_message (base, message);
@@ -1419,6 +1426,20 @@ pn_zigbee_source_class_init (PnZigbeeSourceClass *klass)
 static void
 pn_zigbee_source_init (PnZigbeeSource *self)
 {
+    PnNode  *node    = PN_NODE (self);
+    PnColor  magenta = { 0.78, 0.27, 0.60, 1.0 };
+
+    /* Seed the *instance* visual state.  The class fields in class_init
+     * feed the palette and metadata, but the worksheet body paints from
+     * the instance icon/color (pn_node_get_icon / pn_node_get_color),
+     * which have no class fallback -- so a node that only sets the class
+     * fields renders with a blank icon over the neutral grey default
+     * (the latter reads as "disabled").  class_name is NOT seeded here:
+     * pn_node_get_class_name() already falls back to the class field
+     * pinned in class_init.  Mirrors pn_zigbee_remote_init. */
+    pn_node_set_icon  (node, PN_ZIGBEE_SOURCE_ICON);
+    pn_node_set_color (node, &magenta);
+
     self->filter_logging             = 1;
     self->filter_bridge_devices      = TRUE;
     self->filter_bridge_definitions  = TRUE;
