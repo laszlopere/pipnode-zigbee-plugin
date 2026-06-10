@@ -3454,7 +3454,7 @@ zb_join_finish (ZbDevCtx *ctx, gboolean user_ended)
     gtk_widget_destroy (dialog);
 }
 
-/* Cancel button, Escape, or window-manager close: the user ended it.  The
+/* Done button, Escape, or window-manager close: the user ended it.  The
  * timer's natural-expiry path responds with GTK_RESPONSE_NONE instead. */
 static void
 zb_join_on_response (GtkDialog *dialog, gint response, gpointer user_data)
@@ -3512,7 +3512,7 @@ zb_join_tick (gpointer user_data)
 
 /* Open a 5-minute join window on the coordinator and show a *non-modal-loop*
  * countdown dialog (spinner + progress bar + remaining time + devices-joined
- * count + Cancel) while it is open.  Unlike gtk_dialog_run, this returns
+ * count + Done) while it is open.  Unlike gtk_dialog_run, this returns
  * immediately: the dialog drives itself through its "response"/"destroy"
  * handlers and the per-second timer, so the editor's main loop keeps pumping
  * MQTT traffic underneath it.  The window's modality (input grab) comes from
@@ -3540,7 +3540,7 @@ zb_on_join_clicked (GtkButton *button, gpointer user_data)
             "Pairing \xe2\x80\x94 join window open",
             GTK_WINDOW (main_dialog),
             GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-            "Cancel", GTK_RESPONSE_CANCEL,
+            "Done", GTK_RESPONSE_CANCEL,
             NULL);
     gtk_window_set_default_size (GTK_WINDOW (dialog), 380, -1);
 
