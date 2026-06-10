@@ -109,6 +109,15 @@ contract.
 4. Ship `help/PnZigbee<Node>.html` and wire `pnhelp_DATA` in
    `src/Makefile.am`.
 
+## Sponsorship
+
+This plugin is free and open source, and so is
+[pipnode](https://github.com/laszlopere/pipnode) itself. If they are useful
+to you, please consider sponsoring on
+[**GitHub Sponsors**](https://github.com/sponsors/laszlopere). Sponsoring at
+any tier funds continued development of the open-source pipnode ecosystem
+for everyone.
+
 ## License
 
 Copyright (C) 2026 Laszlo Pere. Licensed under the GNU General Public
