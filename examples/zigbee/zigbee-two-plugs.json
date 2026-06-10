@@ -8,8 +8,8 @@
       "name" : "Zigbee Switch 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 60.0
+        "x" : 360.0,
+        "y" : 120.0
       },
       "properties" : {
         "on" : false,
@@ -24,7 +24,7 @@
       "worksheet" : "Worksheet",
       "position" : {
         "x" : 20.0,
-        "y" : 260.0
+        "y" : 100.0
       },
       "properties" : {
         "broker-profile" : "",
@@ -47,11 +47,11 @@
       "name" : "Zigbee Switch 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 140.0
+        "x" : 360.0,
+        "y" : 200.0
       },
       "properties" : {
-        "on" : false,
+        "on" : true,
         "friendly-name" : "0xa4c1380f9af0ffff",
         "enforce-on-startup" : true
       }
@@ -63,8 +63,8 @@
       "worksheet" : "Worksheet",
       "disabled" : true,
       "position" : {
-        "x" : 780.0,
-        "y" : 560.0
+        "x" : 540.0,
+        "y" : 480.0
       },
       "properties" : {
         "target" : "Debug View",
@@ -77,8 +77,8 @@
       "name" : "Socket 2",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 600.0
+        "x" : 360.0,
+        "y" : 520.0
       },
       "properties" : {
         "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c1380f9af0ffff\"}]"
@@ -90,8 +90,8 @@
       "name" : "Socket 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 520.0
+        "x" : 360.0,
+        "y" : 440.0
       },
       "properties" : {
         "rules" : "[{\"path\":\"/topic\",\"op\":\"==\",\"literal\":\"zigbee2mqtt/0xa4c138a4c9626802\"}]"
@@ -103,8 +103,8 @@
       "name" : "Zigbee Sink 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 820.0,
-        "y" : 100.0
+        "x" : 580.0,
+        "y" : 120.0
       },
       "properties" : {
         "broker-profile" : "",
@@ -118,28 +118,13 @@
       }
     },
     {
-      "type" : "PnDebug",
-      "uuid" : "03307b41-6764-4922-a44b-53f4734694b3",
-      "name" : "Debug Print 2",
-      "worksheet" : "Worksheet",
-      "disabled" : true,
-      "position" : {
-        "x" : 580.0,
-        "y" : 680.0
-      },
-      "properties" : {
-        "target" : "Standard Error",
-        "format" : "JSON"
-      }
-    },
-    {
       "type" : "PnZigbeeRelayStatus",
       "uuid" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
       "name" : "Zigbee Relay Status 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 220.0
+        "x" : 360.0,
+        "y" : 280.0
       },
       "properties" : {
         "friendly-name" : "0xa4c138a4c9626802"
@@ -151,8 +136,8 @@
       "name" : "Zigbee Relay Status 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 580.0,
-        "y" : 300.0
+        "x" : 360.0,
+        "y" : 360.0
       },
       "properties" : {
         "friendly-name" : "0xa4c1380f9af0ffff"
@@ -164,8 +149,8 @@
       "name" : "LED 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 820.0,
-        "y" : 220.0
+        "x" : 540.0,
+        "y" : 280.0
       },
       "properties" : {
         "color" : "rgb(51,217,77)",
@@ -179,8 +164,8 @@
       "name" : "LED 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 820.0,
-        "y" : 300.0
+        "x" : 540.0,
+        "y" : 360.0
       },
       "properties" : {
         "color" : "rgb(51,217,77)",
@@ -189,27 +174,13 @@
       }
     },
     {
-      "type" : "PnDebug",
-      "uuid" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4",
-      "name" : "Debug Print 3",
-      "worksheet" : "Worksheet",
-      "position" : {
-        "x" : 440.0,
-        "y" : 380.0
-      },
-      "properties" : {
-        "target" : "Standard Error",
-        "format" : "JSON"
-      }
-    },
-    {
       "type" : "PnZigbeeRelayCommand",
       "uuid" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db",
       "name" : "Zigbee Relay Command 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 400.0,
-        "y" : 60.0
+        "x" : 360.0,
+        "y" : 40.0
       },
       "properties" : {
         "friendly-name" : "0xa4c138a4c9626802"
@@ -218,11 +189,11 @@
     {
       "type" : "PnZigbeeButton",
       "uuid" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
-      "name" : "Zigbee Button 1",
+      "name" : "Zigbee Button",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 220.0,
-        "y" : 60.0
+        "x" : 180.0,
+        "y" : 40.0
       },
       "properties" : {
         "friendly-name" : "0xf044d3fffef9779d",
@@ -250,10 +221,6 @@
     {
       "source_id" : "8576afee-a672-49c2-a62e-de5c7233d9b8",
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
-    },
-    {
-      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
-      "target_id" : "03307b41-6764-4922-a44b-53f4734694b3"
     },
     {
       "source_id" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
@@ -284,10 +251,6 @@
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
     },
     {
-      "source_id" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db",
-      "target_id" : "c6160241-af67-44a2-8e43-5e5530522080"
-    },
-    {
       "source_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
       "target_id" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db"
     },
@@ -296,8 +259,8 @@
       "target_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c"
     },
     {
-      "source_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
-      "target_id" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4"
+      "source_id" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db",
+      "target_id" : "730fee09-8f9a-4d9c-a2e4-b9c4c2818dd1"
     }
   ],
   "sheets" : [
