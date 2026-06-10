@@ -39,6 +39,8 @@
 /*      factored write-half (value message in, .../set command out).   */
 /*    * PnZigbeeRemote -- filters remote button-press events (payload  */
 /*      `action`) and reshapes them into the canonical message shape.  */
+/*    * PnZigbeeButton -- button-flavoured sibling of PnZigbeeRemote    */
+/*      for a single wireless button (e.g. SONOFF SNZB-01P).           */
 /*    * PnZigbeeWaterLeak -- edge-filters a leak sensor's boolean       */
 /*      `water_leak` (begin / end / both) and reshapes survivors.      */
 /*                                                                     */
@@ -58,6 +60,7 @@
 #include <pn-node-factory.h>
 #include <pn-plugin.h>
 
+#include "pn-zigbee-button.h"
 #include "pn-zigbee-permit-join.h"
 #include "pn-zigbee-relay-command.h"
 #include "pn-zigbee-relay-status.h"
@@ -84,6 +87,7 @@ pn_plugin_init (PnNodeFactory *factory)
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_STATUS);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_RELAY_COMMAND);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_REMOTE);
+    pn_node_factory_register (factory, PN_TYPE_ZIGBEE_BUTTON);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_WATER_LEAK);
     pn_node_factory_register (factory, PN_TYPE_ZIGBEE_PERMIT_JOIN);
 

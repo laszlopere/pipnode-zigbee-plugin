@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zigbee Button (PnZigbeeButton) - Pipnode Help</title>
+<link rel="stylesheet" href="help.css">
+</head>
+<body>
+
+<p><a href="help-index.html">&larr; Pipnode help index</a></p>
+
+<h4 id="PnZigbeeButton">Zigbee Button</h4>
+<p>
+<em>Group:</em> Zigbee. <em>Type:</em> <code>PnZigbeeButton</code>.
+</p>
+<p>
+Filter and reshaping node for a single Zigbee wireless button &mdash;
+e.g. a SONOFF <code>SNZB-01P</code> &mdash; bridged through
+<a href="https://www.zigbee2mqtt.io/">Zigbee2MQTT</a>.  It is the
+button-flavoured sibling of the <em>Zigbee Remote</em> node: structurally
+almost identical, it exists so a single-button device gets its own
+palette entry, naming and output wording.  Such a button publishes each
+press on <code>zigbee2mqtt/&lt;friendly_name&gt;</code> with a
+<code>data.payload</code> JSON object whose <code>action</code> member
+names the gesture:
+</p>
+<pre>{ "action": "single", "battery": 100, "linkquality": 185 }</pre>
+<p>
+The SNZB-01P emits <code>single</code>, <code>double</code> and
+<code>long</code>.  Drop this node between a <em>Zigbee Source</em> (or a
+plain <em>MQTT Source</em>) and any downstream node to turn those raw
+publishes into clean, canonical pipnode messages:
+</p>
+<pre>Zigbee Source &rarr; Zigbee Button &rarr; Debug / Notify / Switch / &hellip;</pre>
+
+<h5>What it does</h5>
+<table>
+  <tr><th>Step</th><th>Behaviour</th></tr>
+  <tr><td>Filter</td>
+      <td>Only messages whose <code>data.payload</code> is an object
+          carrying a <strong>non-empty string</strong>
+          <code>action</code> pass &mdash; i.e. an actual press.  The
+          idle / state-only publishes Z2M interleaves, and the
+          empty-action &ldquo;released&rdquo; frames some converters
+          emit, are dropped (nothing is forwarded).</td></tr>
+  <tr><td>Reshape</td>
+      <td>Survivors are stamped into the canonical message contract so
+          a downstream <em>LED</em>, <em>Debug</em>, <em>Graph</em> or
+          <em>Notify</em> reads the same shape it gets from any other
+          node:
+          <ul>
+            <li><code>data.success</code> = <code>true</code></li>
+            <li><code>data.value</code> = <code>1.0</code></li>
+            <li><code>data.output</code> = a human-readable line, e.g.
+                <code>Button kitchen_button pressed (action: single)</code></li>
+          </ul>
+          The original envelope and <code>data.payload</code> (the
+          <code>action</code>, <code>battery</code>,
+          <code>linkquality</code>, and any injected <code>device</code>
+          block) are left untouched, so a downstream node can still
+          inspect the detail.</td></tr>
+</table>
+
+<h5>How the button is named</h5>
+<p>
+The name in <code>data.output</code> is resolved in this order:
+</p>
+<ol>
+  <li><code>data.payload.device.friendlyName</code> &mdash; the
+      identity block a <em>Zigbee Source</em> injects by default
+      (<code>inject-device-info</code>), which is the human-friendly
+      Z2M name.</li>
+  <li>The friendly-name tail of the envelope topic
+      (<code>zigbee2mqtt/&lt;tail&gt;</code> &rarr; <code>&lt;tail&gt;</code>);
+      for an unrenamed device this is its IEEE address, e.g.
+      <code>0xf044d3fffef9779d</code>.</li>
+  <li>The bare topic, then <code>unknown</code>, as last resorts.</li>
+</ol>
+<p>
+For the friendliest output, keep this node downstream of a
+<em>Zigbee Source</em> with device-info injection enabled (its
+default).
+</p>
+
+<h5>Configuration</h5>
+<p>
+Both properties are <strong>optional filters</strong>.  Left empty
+(the default) they are wildcards, so the node forwards every press.
+Set either to narrow the node to one specific button and/or one
+specific gesture &mdash; they are ANDed.
+</p>
+<table>
+  <tr><th>Property</th><th>Description</th></tr>
+  <tr><td><code>friendly-name</code></td>
+      <td>When set, only presses from this button pass.  Matched
+          against the injected
+          <code>data.payload.device.friendlyName</code> (when an
+          upstream <em>Zigbee Source</em> injects device info) or,
+          failing that, the friendly-name tail of the envelope topic
+          (<code>zigbee2mqtt/&lt;tail&gt;</code> &mdash; the bare device
+          id for an unrenamed device), so you can enter either form.
+          <strong>Empty matches every button.</strong></td></tr>
+  <tr><td><code>action</code></td>
+      <td>When set, only presses whose <code>data.payload.action</code>
+          equals this exact value pass (e.g. <code>single</code>,
+          <code>double</code>, <code>long</code>).
+          <strong>Empty matches every action.</strong></td></tr>
+</table>
+
+<h5>Wiring example</h5>
+<pre>MQTT/Zigbee Source (topic = zigbee2mqtt/#)
+    &rarr; Zigbee Button (action = "single")
+        &rarr; Notify (title = "{{output}}")</pre>
+<p>
+A single press publishes <code>zigbee2mqtt/0xf044d3fffef9779d</code>
+with <code>{"action":"single",&hellip;}</code>; the <em>Zigbee
+Source</em> forwards it (and, by default, injects the device block); the
+<em>Zigbee Button</em> recognises the press, sets <code>value=1.0</code>
+/ <code>success=true</code> and an output line like
+<code>Button kitchen_button pressed (action: single)</code>, and the
+<em>Notify</em> node pops it on screen.
+</p>
+
+</body>
+</html>
