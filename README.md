@@ -8,6 +8,8 @@ driving them via a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge.
 
 ![A Zigbee button driving two plugs on a pipnode worksheet](screenshots/button.png)
 
+![The Zigbee Devices dialog listing devices discovered from the Zigbee2MQTT bridge](screenshots/zigbee.devices.png)
+
 > **Status: in progress.** The following node types are registered and
 > usable: `PnZigbeeSource`, `PnZigbeeSwitch`, `PnZigbeeRelayStatus`,
 > `PnZigbeeRelayCommand`, `PnZigbeeRemote`, and `PnZigbeeWaterLeak`. More
