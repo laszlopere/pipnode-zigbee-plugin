@@ -8,7 +8,7 @@
       "name" : "Zigbee Switch 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 60.0
       },
       "properties" : {
@@ -47,7 +47,7 @@
       "name" : "Zigbee Switch 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 140.0
       },
       "properties" : {
@@ -63,7 +63,7 @@
       "worksheet" : "Worksheet",
       "disabled" : true,
       "position" : {
-        "x" : 440.0,
+        "x" : 780.0,
         "y" : 560.0
       },
       "properties" : {
@@ -77,7 +77,7 @@
       "name" : "Socket 2",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 600.0
       },
       "properties" : {
@@ -90,7 +90,7 @@
       "name" : "Socket 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 520.0
       },
       "properties" : {
@@ -103,7 +103,7 @@
       "name" : "Zigbee Sink 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 480.0,
+        "x" : 820.0,
         "y" : 100.0
       },
       "properties" : {
@@ -124,7 +124,7 @@
       "worksheet" : "Worksheet",
       "disabled" : true,
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 680.0
       },
       "properties" : {
@@ -138,7 +138,7 @@
       "name" : "Zigbee Relay Status 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 220.0
       },
       "properties" : {
@@ -151,7 +151,7 @@
       "name" : "Zigbee Relay Status 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 240.0,
+        "x" : 580.0,
         "y" : 300.0
       },
       "properties" : {
@@ -164,7 +164,7 @@
       "name" : "LED 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 480.0,
+        "x" : 820.0,
         "y" : 220.0
       },
       "properties" : {
@@ -179,7 +179,7 @@
       "name" : "LED 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 480.0,
+        "x" : 820.0,
         "y" : 300.0
       },
       "properties" : {
@@ -194,12 +194,39 @@
       "name" : "Debug Print 3",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 480.0,
-        "y" : 360.0
+        "x" : 440.0,
+        "y" : 380.0
       },
       "properties" : {
-        "target" : "Debug View",
+        "target" : "Standard Error",
         "format" : "JSON"
+      }
+    },
+    {
+      "type" : "PnZigbeeRelayCommand",
+      "uuid" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db",
+      "name" : "Zigbee Relay Command 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 400.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "friendly-name" : "0xa4c138a4c9626802"
+      }
+    },
+    {
+      "type" : "PnZigbeeButton",
+      "uuid" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
+      "name" : "Zigbee Button 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 220.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "friendly-name" : "0xf044d3fffef9779d",
+        "action" : ""
       }
     }
   ],
@@ -257,11 +284,19 @@
       "target_id" : "08a7f710-40e8-4740-b5a5-937a4ce278dc"
     },
     {
-      "source_id" : "ccc191f7-f7ca-4dcf-b495-6d1ed9b84774",
-      "target_id" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4"
+      "source_id" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db",
+      "target_id" : "c6160241-af67-44a2-8e43-5e5530522080"
     },
     {
-      "source_id" : "80dd8f55-41a0-46c5-82cd-52c8b6badb5f",
+      "source_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
+      "target_id" : "8f9c4a1e-8991-4acf-a4e3-1f5f98a5f2db"
+    },
+    {
+      "source_id" : "3f42cb93-1085-4974-a8ca-5506c3df6c35",
+      "target_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c"
+    },
+    {
+      "source_id" : "a8638eed-3069-4686-b1aa-8e80ded97b6c",
       "target_id" : "d2bcb728-30c4-48f8-b9d0-25bb448e92b4"
     }
   ],

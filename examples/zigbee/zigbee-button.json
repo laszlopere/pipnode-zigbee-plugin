@@ -32,18 +32,36 @@
       "name" : "Debug Print 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 440.0,
+        "x" : 420.0,
         "y" : 60.0
       },
       "properties" : {
         "target" : "Standard Output",
         "format" : "JSON"
       }
+    },
+    {
+      "type" : "PnZigbeeButton",
+      "uuid" : "c16beec5-f3ce-42c7-ba96-0dcc5310f2b4",
+      "name" : "Zigbee Button 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 240.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "friendly-name" : "0xf044d3fffef9779d",
+        "action" : ""
+      }
     }
   ],
   "connections" : [
     {
       "source_id" : "1596c64c-9858-461c-876e-ca9b293db836",
+      "target_id" : "c16beec5-f3ce-42c7-ba96-0dcc5310f2b4"
+    },
+    {
+      "source_id" : "c16beec5-f3ce-42c7-ba96-0dcc5310f2b4",
       "target_id" : "1f444cc2-60dc-4023-804b-795878eda27b"
     }
   ],
