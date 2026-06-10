@@ -1,6 +1,11 @@
 /*
- * Copyright (C) 2026 Laszlo Pere.  All rights reserved.
- * SPDX-License-Identifier: LicenseRef-Proprietary
+ * Copyright (C) 2026 Laszlo Pere
+ *
+ * This file is part of pipnode-zigbee-plugin, a plugin for Pipnode, and
+ * is free software under the GNU General Public License version 3 or (at
+ * your option) any later version.  See the file COPYING.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Implementation of the tiny unit-test harness declared in pn-test.h.
  * Original to this plugin; see the header for the contract and output

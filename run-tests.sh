@@ -19,8 +19,8 @@
 # Exit status is non-zero if any test binary reports a failed check or
 # fails to build.
 #
-# Copyright (C) 2026 Laszlo Pere.  All rights reserved.
-# SPDX-License-Identifier: LicenseRef-Proprietary
+# Copyright (C) 2026 Laszlo Pere
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 set -u
 

@@ -1,14 +1,21 @@
 /*
- * Copyright (C) 2026 Laszlo Pere.  All rights reserved.
+ * Copyright (C) 2026 Laszlo Pere
  *
- * This file is part of the pipnode-zigbee-plugin, a proprietary plugin
- * for Pipnode.  It links the pipnode host library solely through the
- * documented plugin interface (pn_plugin_init and the public pipnode
- * headers) and is therefore distributed under the additional permission
- * granted by Pipnode's LICENSE.PLUGIN-EXCEPTION, which allows a plugin
- * to be released under any license, including this proprietary one.
+ * This file is part of pipnode-zigbee-plugin, a plugin for Pipnode.  It
+ * is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License version 3, or (at your option)
+ * any later version, as published by the Free Software Foundation.
  *
- * SPDX-License-Identifier: LicenseRef-Proprietary
+ * The plugin links the Pipnode host solely through the documented plugin
+ * interface and is covered by Pipnode's LICENSE.PLUGIN-EXCEPTION; this
+ * file's own license is the GPL, version 3 or later.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; see the GNU General Public License for more
+ * details.  You should have received a copy of the license in the file
+ * COPYING.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #ifndef PN_ZIGBEE_RELAY_COMMAND_H

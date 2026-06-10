@@ -12,4 +12,5 @@ EXTRA_DIST = \
 	autogen.sh \
 	README.md \
 	LICENSE \
+	COPYING \
 	data/icons/README.md

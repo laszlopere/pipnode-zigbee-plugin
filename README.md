@@ -6,16 +6,21 @@ driving them via a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge.
 
 ![A Zigbee remote wired to a Zigbee switch on a pipnode worksheet](screenshots/remote-switch.png)
 
+![A Zigbee button driving two plugs on a pipnode worksheet](screenshots/button.png)
+
 > **Status: in progress.** The following node types are registered and
 > usable: `PnZigbeeSource`, `PnZigbeeSwitch`, `PnZigbeeRelayStatus`,
 > `PnZigbeeRelayCommand`, `PnZigbeeRemote`, and `PnZigbeeWaterLeak`. More
 > (ZigbeeEvent, ZigbeePair, ZigbeeBridgeStatus, …) will be added
 > incrementally.
 
-This is a **proprietary, closed-source** plugin. It talks to the pipnode
-host only through the documented plugin interface, so it is covered by
-pipnode's `LICENSE.PLUGIN-EXCEPTION` and may be distributed under its own
-terms. See [LICENSE](LICENSE).
+This is **free software**, licensed under the **GNU GPL v3 or later**
+(see [LICENSE](LICENSE) / [COPYING](COPYING)). It talks to the pipnode
+host only through the documented plugin interface, so the combination is
+covered by pipnode's `LICENSE.PLUGIN-EXCEPTION` (an additional permission
+under GPL v3 §7); this plugin's own source and binaries are GPLv3. Pipnode
+itself remains GPLv3-or-later — relicensing this plugin does not change
+that.
 
 ## Architecture
 
@@ -103,3 +108,11 @@ contract.
    `src/pn-zigbee-plugin.c`.
 4. Ship `help/PnZigbee<Node>.html` and wire `pnhelp_DATA` in
    `src/Makefile.am`.
+
+## License
+
+Copyright (C) 2026 Laszlo Pere. Licensed under the GNU General Public
+License, version 3 or later — see [LICENSE](LICENSE) / [COPYING](COPYING).
+The plugin reaches the pipnode host only through the documented plugin
+interface, so the combination is permitted by pipnode's
+`LICENSE.PLUGIN-EXCEPTION`; pipnode's own core stays GPLv3-or-later.
