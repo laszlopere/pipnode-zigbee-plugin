@@ -1,0 +1,54 @@
+{
+  "format" : "pipnode",
+  "version" : 1,
+  "nodes" : [
+    {
+      "type" : "PnZigbeeSource",
+      "uuid" : "1596c64c-9858-461c-876e-ca9b293db836",
+      "name" : "Zigbee Source 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 60.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "broker-profile" : "",
+        "url" : "",
+        "username" : "",
+        "client-id" : "",
+        "subscribe-topic" : "zigbee2mqtt/#",
+        "qos" : 0,
+        "filter-logging" : true,
+        "filter-bridge-devices" : true,
+        "filter-bridge-definitions" : true,
+        "filter-bridge-info" : true,
+        "inject-device-info" : true,
+        "inject-device-capabilities" : false
+      }
+    },
+    {
+      "type" : "PnDebug",
+      "uuid" : "1f444cc2-60dc-4023-804b-795878eda27b",
+      "name" : "Debug Print 1",
+      "worksheet" : "Worksheet",
+      "position" : {
+        "x" : 440.0,
+        "y" : 60.0
+      },
+      "properties" : {
+        "target" : "Standard Output",
+        "format" : "JSON"
+      }
+    }
+  ],
+  "connections" : [
+    {
+      "source_id" : "1596c64c-9858-461c-876e-ca9b293db836",
+      "target_id" : "1f444cc2-60dc-4023-804b-795878eda27b"
+    }
+  ],
+  "sheets" : [
+    "Worksheet"
+  ],
+  "active_sheet" : "Worksheet"
+}
