@@ -12,7 +12,7 @@
         "y" : 60.0
       },
       "properties" : {
-        "on" : true,
+        "on" : false,
         "friendly-name" : "0xa4c138a4c9626802",
         "enforce-on-startup" : true
       }
@@ -23,8 +23,8 @@
       "name" : "Zigbee Source 1",
       "worksheet" : "Worksheet",
       "position" : {
-        "x" : 60.0,
-        "y" : 100.0
+        "x" : 20.0,
+        "y" : 260.0
       },
       "properties" : {
         "broker-profile" : "",
@@ -51,7 +51,7 @@
         "y" : 140.0
       },
       "properties" : {
-        "on" : true,
+        "on" : false,
         "friendly-name" : "0xa4c1380f9af0ffff",
         "enforce-on-startup" : true
       }
