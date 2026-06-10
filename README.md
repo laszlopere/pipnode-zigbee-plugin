@@ -1,8 +1,17 @@
 # pipnode-zigbee-plugin
 
-Nodes for interacting with [Zigbee](https://csa-iot.org/all-solutions/zigbee/)
-devices from [pipnode](https://github.com/laszlopere/pipnode) worksheets,
-driving them via a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge.
+**pipnode-zigbee-plugin** adds Zigbee control and query nodes to
+[pipnode](https://github.com/laszlopere/pipnode), driving your devices
+through a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) bridge over MQTT.
+
+[pipnode](https://github.com/laszlopere/pipnode) is the host application
+this plugin extends — a node-based worksheet tool for wiring up
+home-automation and data flows. See the
+[pipnode repository](https://github.com/laszlopere/pipnode) for the host
+itself, how to install it, and its plugin interface. This plugin loads
+into pipnode through that documented interface and contributes Z2M-aware
+node types — the right topic shapes, payload schemas, and device
+discovery — on top of pipnode's generic MQTT primitives.
 
 ![A Zigbee remote wired to a Zigbee switch on a pipnode worksheet](screenshots/remote-switch.png)
 
@@ -23,30 +32,6 @@ covered by pipnode's `LICENSE.PLUGIN-EXCEPTION` (an additional permission
 under GPL v3 §7); this plugin's own source and binaries are GPLv3. Pipnode
 itself remains GPLv3-or-later — relicensing this plugin does not change
 that.
-
-## Architecture
-
-A Zigbee USB dongle (e.g. AVATTO **GW70-MQTT**, a TI CC2652P + CP2102N
-stick) is a Zigbee **radio**, not an MQTT endpoint — the "MQTT" in the
-name is the ecosystem it targets, not a protocol it speaks. The full
-chain is:
-
-```
-Zigbee devices  <--2.4 GHz radio-->  GW70 dongle  <--USB serial-->  Zigbee2MQTT  <--TCP-->  MQTT broker  <--TCP-->  pipnode (this plugin)
-   (bulbs,                            (CC2652P                       (Node.js                (Mosquitto,             (subscribes to
-    sensors)                           radio chip)                    daemon)                 etc.)                   zigbee2mqtt/* topics)
-```
-
-The dongle must be physically near the devices (radio range), but the
-machine running Z2M can be a small satellite (Raspberry Pi, mini PC)
-connected to a central broker over TCP/IP. This plugin sits at the far
-right of the chain: it speaks MQTT to the broker and follows the
-documented [Z2M topic / payload contract](https://www.zigbee2mqtt.io/guide/usage/mqtt_topics_and_messages.html).
-
-Pipnode already ships MQTT Source / Sink primitives (the `network`
-plugin); the value this plugin adds on top is Z2M-aware node types with
-the right topic shapes, payload schemas, and device-discovery flow built
-in.
 
 ## Building
 
@@ -74,42 +59,6 @@ build tree:
 make
 PIPNODE_PLUGIN_PATH=$PWD/src/.libs pipnode
 ```
-
-## Design notes
-
-- **Headless / core-only.** Each Zigbee node is pure logic (MQTT
-  publish / subscribe + JSON payloads), so the plugin links
-  `pipnode-core` (the GTK-free tier) and builds a single
-  `pipnode_zigbee.so`. It is server-installable and runs under
-  `pipnode-run`. Node settings dialogs, when needed, should be
-  expressed as a declarative settings schema to keep everything in the
-  one core `.so`; only split off a `-gui.so` companion if the schema
-  cannot describe the dialog.
-- **Credentials.** MQTT broker host, port, username, password, TLS
-  options and Z2M base topic belong in a host-provisioned profile
-  (pipnode ABI v5), not in serialised node properties. Declare a
-  `Zigbee2MQTTBrokerProfile` profile type (likely sharing the broker
-  side with the network plugin's MQTT profile) and resolve it at run
-  time rather than storing secrets in the worksheet file.
-- **Topic / payload contract.** Follow Z2M's documented topic shape
-  (`<base_topic>/<friendly_name>`, `<base_topic>/<friendly_name>/set`,
-  `<base_topic>/bridge/*`). Treat that contract as the boundary; do
-  not invent parallel naming.
-
-See the `PLUGINS` guide in the pipnode source tree for the full plugin
-contract.
-
-## Adding a node (checklist)
-
-1. Add `src/pn-zigbee-<node>.c` / `.h` defining a `PnNode` subclass
-   (`G_DEFINE_TYPE`, set `class_name`/`icon`/`color`/`category`/
-   `has_input`/`has_output`/`receive` in `_class_init`).
-2. List the new sources in `src/Makefile.am`
-   (`pipnode_zigbee_la_SOURCES`).
-3. `pn_node_factory_register (factory, PN_TYPE_ZIGBEE_<NODE>)` in
-   `src/pn-zigbee-plugin.c`.
-4. Ship `help/PnZigbee<Node>.html` and wire `pnhelp_DATA` in
-   `src/Makefile.am`.
 
 ## Sponsorship
 
