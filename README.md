@@ -3,6 +3,8 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Language: C](https://img.shields.io/badge/language-C-555.svg)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2.svg)](https://github.com/sponsors/laszlopere)
+![Platform: Linux](https://img.shields.io/badge/platform-Linux-555.svg)
+[![Last commit](https://img.shields.io/github/last-commit/laszlopere/pipnode-zigbee-plugin.svg)](https://github.com/laszlopere/pipnode-zigbee-plugin/commits)
 
 **pipnode-zigbee-plugin** adds Zigbee control and query nodes to
 [pipnode](https://github.com/laszlopere/pipnode), driving your devices
