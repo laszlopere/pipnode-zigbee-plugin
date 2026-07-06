@@ -87,6 +87,7 @@ tests_table=(
     "test-zigbee-permit-join    pn-zigbee-permit-join.c"
     "test-zigbee-source         pn-zigbee-source.c"
     "test-zigbee-sink           pn-zigbee-sink.c"
+    "test-zigbee-name-registry  pn-zigbee-name-registry.c"
 )
 
 selected () {

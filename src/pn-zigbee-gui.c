@@ -64,6 +64,9 @@
 
 #include <json-glib/json-glib.h>
 
+#include "pn-zigbee-name-registry.h"
+#include "pn-zigbee-node-gui.h"
+
 /* Absolute path of the installed menu icon, baked in by the build
  * (src/Makefile.am).  Fall back to a stock themed icon name otherwise. */
 #ifndef ZB_ICON_PATH
@@ -4037,13 +4040,20 @@ pn_plugin_gui_init (PnNodeFactory *factory)
         .description = "Zigbee Devices dialog (GUI companion).",
     };
 
-    (void) factory;   /* no per-type vfuncs to install; the menu is all */
+    (void) factory;
 
     /* Our bundled Zigbee glyph, by absolute installed path (ZB_ICON_PATH,
      * baked in at build time -- see src/Makefile.am).  Fall back to the
      * stock "network-wireless" themed icon if the build did not define it. */
     pn_device_provider_register ("zigbee", "Zigbee Devices", ZB_ICON_PATH,
                                  zb_dialog_present, NULL, NULL);
+
+    /* Silently start gathering Zigbee2MQTT friendly names from every broker
+     * in the background, and hook the editable entry+dropdown combo onto the
+     * friendly-name field of the Zigbee node settings dialogs so it is
+     * already populated the moment the user opens one. */
+    zb_name_registry_start ();
+    zb_zigbee_nodes_gui_install ();
 
     return &info;
 }

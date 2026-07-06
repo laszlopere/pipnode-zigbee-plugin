@@ -40,7 +40,12 @@ pipnode_zigbee_la_LIBADD  = $(PIPNODE_LIBS)
 # GTK tier (pipnode-gui pulls in libpipnode-gui + libpipnode-core + GTK),
 # exports pn_plugin_gui_init(), and registers the "Zigbee" Devices-menu
 # provider.  Same -module/-avoid-version/-shared flags as the logic half.
-pipnode_zigbee_gui_la_SOURCES = pn-zigbee-gui.c
+pipnode_zigbee_gui_la_SOURCES = \
+	pn-zigbee-gui.c \
+	pn-zigbee-name-registry.c \
+	pn-zigbee-name-registry.h \
+	pn-zigbee-node-gui.c \
+	pn-zigbee-node-gui.h
 # ZB_ICON_PATH: the absolute path of the installed menu icon, handed to
 # pn_device_provider_register() (the host now accepts a full path).  make
 # expands $(datadir) here, so the compiled-in string is fully resolved.
