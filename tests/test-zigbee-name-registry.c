@@ -119,6 +119,70 @@ case_records_type (void)
     CHECK_NULL (zb_name_registry_lookup_type ("reg_unknown_name"));
 }
 
+/* The one-word device category is classified from the exposes tree, mirroring
+ * the source node's synthesize_category(), plus the leak/coordinator
+ * refinements.  Assert one device per category branch. */
+static void
+case_records_category (void)
+{
+    struct { const char *name; const char *json; const char *want; } cases[] = {
+        /* mains switch -> plug */
+        { "cat_plug",
+          "{\"friendly_name\":\"cat_plug\",\"power_source\":\"Mains (single phase)\","
+          "\"definition\":{\"exposes\":[{\"type\":\"switch\","
+          "\"features\":[{\"property\":\"state\",\"access\":7}]}]}}",
+          "plug" },
+        /* battery switch -> switch */
+        { "cat_switch",
+          "{\"friendly_name\":\"cat_switch\",\"power_source\":\"Battery\","
+          "\"definition\":{\"exposes\":[{\"type\":\"switch\","
+          "\"features\":[{\"property\":\"state\",\"access\":7}]}]}}",
+          "switch" },
+        /* light -> light */
+        { "cat_light",
+          "{\"friendly_name\":\"cat_light\",\"definition\":{\"exposes\":"
+          "[{\"type\":\"light\",\"features\":[{\"property\":\"state\",\"access\":7}]}]}}",
+          "light" },
+        /* an action expose -> remote */
+        { "cat_remote",
+          "{\"friendly_name\":\"cat_remote\",\"definition\":{\"exposes\":"
+          "[{\"type\":\"enum\",\"property\":\"action\",\"access\":1}]}}",
+          "remote" },
+        /* read-only water_leak -> leak */
+        { "cat_leak",
+          "{\"friendly_name\":\"cat_leak\",\"definition\":{\"exposes\":"
+          "[{\"type\":\"binary\",\"property\":\"water_leak\",\"access\":1},"
+          " {\"type\":\"numeric\",\"property\":\"battery\",\"access\":1}]}}",
+          "leak" },
+        /* all read-only, no leak -> sensor */
+        { "cat_sensor",
+          "{\"friendly_name\":\"cat_sensor\",\"definition\":{\"exposes\":"
+          "[{\"type\":\"numeric\",\"property\":\"temperature\",\"access\":1}]}}",
+          "sensor" },
+        /* top-level Coordinator -> coordinator */
+        { "cat_coord",
+          "{\"friendly_name\":\"cat_coord\",\"type\":\"Coordinator\"}",
+          "coordinator" },
+        /* no definition -> device */
+        { "cat_dev",
+          "{\"friendly_name\":\"cat_dev\",\"type\":\"Router\"}",
+          "device" },
+    };
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+        gchar *arr = g_strdup_printf ("[%s]", cases[i].json);
+        gchar *got;
+
+        ingest (arr);
+        got = zb_name_registry_lookup_category (cases[i].name);
+        CHECK_STR_EQ (got, cases[i].want);
+        g_free (got);
+        g_free (arr);
+    }
+}
+
 /* A name first seen without a type later gains one; a good description is
  * never clobbered by a subsequent bare-fallback publish. */
 static void
@@ -255,6 +319,7 @@ main (int argc, char **argv)
 
     t_add ("adds_names",             case_adds_names);
     t_add ("records_type",           case_records_type);
+    t_add ("records_category",       case_records_category);
     t_add ("type_fill_and_keep",     case_type_fill_and_keep);
     t_add ("dedups",                 case_dedups);
     t_add ("merges_across_publishes",case_merges_across_publishes);

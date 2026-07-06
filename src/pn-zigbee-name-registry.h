@@ -65,8 +65,10 @@ void zb_name_registry_start (void);
  * `friendly_name` and a human-readable type -- the nested
  * `definition.description` ("Water leak detector", "Security remote control",
  * ...), falling back to the top-level `type` ("Coordinator") when there is no
- * definition.  Emits "changed" (see zb_name_registry_get_object()) if a name
- * was added or first gained a type.  A @payload that is %NULL or not an array
+ * definition.  Also records a one-word device category (see
+ * zb_name_registry_lookup_category()).  Emits "changed" (see
+ * zb_name_registry_get_object()) if a name was added or first gained a
+ * type/category.  A @payload that is %NULL or not an array
  * is ignored, so a malformed publish never blanks a good set.  Called from the
  * hidden sources' message handler; exposed so the ingest logic can be
  * exercised network-free.
@@ -95,6 +97,20 @@ GPtrArray *zb_name_registry_get_names (void);
  *   when @name is unknown or has no type.  Free with g_free().
  */
 gchar *zb_name_registry_lookup_type (const gchar *name);
+
+/**
+ * zb_name_registry_lookup_category:
+ * @name: a friendly name (typically one returned by zb_name_registry_get_names())
+ *
+ * The one-word device class recorded for @name -- "light", "plug", "switch",
+ * "leak", "sensor", "remote", "lock", "cover", "fan", "climate",
+ * "coordinator", or "device".  The combo maps it to a type glyph shown to the
+ * left of the two text lines.
+ *
+ * Returns: (transfer full) (nullable): a newly-allocated category string, or
+ *   %NULL when @name is unknown.  Free with g_free().
+ */
+gchar *zb_name_registry_lookup_category (const gchar *name);
 
 /**
  * zb_name_registry_get_object:

@@ -32,18 +32,49 @@
 /* ------------------------------------------------------------------ */
 /*  The editable friendly-name combo editor                            */
 /*                                                                     */
-/*  A GtkComboBox with an entry, backed by a two-column list store      */
-/*  (friendly name, human-readable type).  The entry -- and thus the    */
-/*  stored property value -- is just the friendly name; the dropdown    */
-/*  rows render two lines via a custom cell data func: the name in the  */
-/*  normal foreground, the type below it in a smaller, dimmer grey.     */
+/*  A GtkComboBox with an entry, backed by a three-column list store    */
+/*  (type glyph, friendly name, human-readable type).  The entry -- and */
+/*  thus the stored property value -- is just the friendly name; each   */
+/*  dropdown row shows a tall magenta FontAwesome type glyph on the     */
+/*  left, then two text lines: the name in the normal foreground, the   */
+/*  type below it in a smaller, dimmer grey.                            */
 /* ------------------------------------------------------------------ */
 
-enum { COL_NAME, COL_TYPE, N_COLS };
+enum { COL_ICON, COL_NAME, COL_TYPE, N_COLS };
+
+/* The nodes' magenta (PnColor {0.78,0.27,0.60} = rgb 199,69,153); the type
+ * glyph is drawn in it so the row ties back to the Zigbee node palette. */
+#define ZB_ICON_COLOR "#C74599"
+
+/* A single glyph sized to span the two text lines, vertically centred. */
+#define ZB_ICON_FONT  "FontAwesome 18"
+
+/* Map a one-word device category (from the registry) to the FontAwesome glyph
+ * shown at the row's left.  Reuses the Zigbee nodes' own glyphs where a node
+ * exists (switch/leak/remote), and stock FA4 glyphs otherwise; an unknown or
+ * missing category falls back to a generic cube.  All codepoints exist in the
+ * classic "FontAwesome" family. */
+static const gchar *
+category_glyph (const gchar *category)
+{
+    if (category == NULL)                       return "\xef\x86\xb2";  /* fa-cube          U+F1B2 */
+    if (g_strcmp0 (category, "switch")      == 0) return "\xef\x88\x85";/* fa-toggle-on      U+F205 */
+    if (g_strcmp0 (category, "plug")        == 0) return "\xef\x87\xa6";/* fa-plug           U+F1E6 */
+    if (g_strcmp0 (category, "light")       == 0) return "\xef\x83\xab";/* fa-lightbulb-o    U+F0EB */
+    if (g_strcmp0 (category, "leak")        == 0) return "\xef\x81\x83";/* fa-tint           U+F043 */
+    if (g_strcmp0 (category, "sensor")      == 0) return "\xef\x8b\x9b";/* fa-microchip      U+F2DB */
+    if (g_strcmp0 (category, "remote")      == 0) return "\xef\x89\x9a";/* fa-hand-pointer   U+F25A */
+    if (g_strcmp0 (category, "lock")        == 0) return "\xef\x80\xa3";/* fa-lock           U+F023 */
+    if (g_strcmp0 (category, "cover")       == 0) return "\xef\x8b\x90";/* fa-window-maximize U+F2D0 */
+    if (g_strcmp0 (category, "fan")         == 0) return "\xef\x8b\x9c";/* fa-snowflake-o    U+F2DC */
+    if (g_strcmp0 (category, "climate")     == 0) return "\xef\x8b\x89";/* fa-thermometer-half U+F2C9 */
+    if (g_strcmp0 (category, "coordinator") == 0) return "\xef\x83\xa8";/* fa-sitemap        U+F0E8 */
+    return "\xef\x86\xb2";                       /* fa-cube (device / unknown) U+F1B2 */
+}
 
 /* Fill @store from the current registry snapshot: one row per name, with its
- * recorded type (or empty).  Clearing + refilling the store leaves the combo's
- * entry text (the bound property value) untouched. */
+ * type glyph and recorded type (or empty).  Clearing + refilling the store
+ * leaves the combo's entry text (the bound property value) untouched. */
 static void
 fill_store (GtkListStore *store)
 {
@@ -55,12 +86,15 @@ fill_store (GtkListStore *store)
     {
         const gchar *name = g_ptr_array_index (names, i);
         gchar       *type = zb_name_registry_lookup_type (name);
+        gchar       *cat  = zb_name_registry_lookup_category (name);
 
         gtk_list_store_insert_with_values (store, NULL, -1,
+                                           COL_ICON, category_glyph (cat),
                                            COL_NAME, name,
                                            COL_TYPE, type != NULL ? type : "",
                                            -1);
         g_free (type);
+        g_free (cat);
     }
     g_ptr_array_unref (names);
 }
@@ -148,19 +182,35 @@ friendly_name_editor (PnNode     *self,
     if (g_strcmp0 (pspec->name, "friendly-name") != 0)
         return NULL;
 
-    store = gtk_list_store_new (N_COLS, G_TYPE_STRING, G_TYPE_STRING);
+    store = gtk_list_store_new (N_COLS, G_TYPE_STRING, G_TYPE_STRING,
+                                G_TYPE_STRING);
     combo = gtk_combo_box_new_with_model_and_entry (GTK_TREE_MODEL (store));
     g_object_unref (store);   /* combo now holds the only ref */
 
     /* The entry -- and thus the stored property value -- is the friendly
-     * name column; the type column is display-only, shown by the cell data
-     * func below. */
+     * name column; the icon and type columns are display-only. */
     gtk_combo_box_set_entry_text_column (GTK_COMBO_BOX (combo), COL_NAME);
     entry = gtk_bin_get_child (GTK_BIN (combo));
 
-    /* Own the popup rendering: clear any default renderer, then install one
-     * text cell driven by row_cell_data() for the two-line name/type look. */
+    /* Own the popup rendering: clear any default renderer, then pack the
+     * left-hand type-glyph cell followed by the two-line text cell. */
     gtk_cell_layout_clear (GTK_CELL_LAYOUT (combo));
+
+    /* Type glyph: a tall magenta FontAwesome glyph, vertically centred so it
+     * spans both text lines.  A plain COL_ICON text attribute -- no data func
+     * -- since every row uses the same font/colour. */
+    cell = gtk_cell_renderer_text_new ();
+    g_object_set (cell,
+                  "font",       ZB_ICON_FONT,
+                  "foreground", ZB_ICON_COLOR,
+                  "yalign",     0.5,
+                  "xpad",       4,
+                  NULL);
+    gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo), cell, FALSE);
+    gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo), cell,
+                                    "text", COL_ICON, NULL);
+
+    /* Two-line name/type text. */
     cell = gtk_cell_renderer_text_new ();
     g_object_set (cell, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
     gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo), cell, TRUE);

@@ -52,9 +52,9 @@ struct _ZbNameRegistry
 {
     GObject     parent_instance;
 
-    /* Known devices: owned friendly-name key -> owned human-readable type
-     * value ("" when the type is not yet known).  Merged across every broker,
-     * so a name is present iff at least one broker reports it. */
+    /* Known devices: owned friendly-name key -> owned #ZbDeviceInfo value.
+     * Merged across every broker, so a name is present iff at least one
+     * broker reports it. */
     GHashTable *devices;
 
     /* One hidden #PnMqtt source per broker profile, owned for the process
@@ -68,6 +68,28 @@ G_DEFINE_TYPE (ZbNameRegistry, zb_name_registry, G_TYPE_OBJECT)
 
 enum { SIG_CHANGED, N_SIGNALS };
 static guint signals[N_SIGNALS];
+
+/* Per-device record kept in the `devices` table.  @type is the
+ * human-readable description (combo's second line; "" until known); @category
+ * is the one-word device class ("plug", "leak", "remote", ...) the combo maps
+ * to a type glyph. */
+typedef struct
+{
+    gchar *type;
+    gchar *category;
+} ZbDeviceInfo;
+
+static void
+device_info_free (gpointer data)
+{
+    ZbDeviceInfo *info = data;
+
+    if (info == NULL)
+        return;
+    g_free (info->type);
+    g_free (info->category);
+    g_free (info);
+}
 
 static void
 zb_name_registry_finalize (GObject *object)
@@ -98,7 +120,7 @@ static void
 zb_name_registry_init (ZbNameRegistry *self)
 {
     self->devices = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                           g_free, g_free);
+                                           g_free, device_info_free);
     self->sources = g_ptr_array_new_with_free_func (g_object_unref);
     self->started = FALSE;
 }
@@ -165,6 +187,128 @@ device_type (JsonObject *dev)
     return peek_string (dev, "type");
 }
 
+/* Does @expose (or any of its nested `features`) carry the ZCL "settable"
+ * access bit (access & 2)?  Mirror of pn-zigbee-source.c's
+ * expose_has_settable(): compound exposes (switch/light/climate) hold their
+ * state under `features`, so the walk recurses. */
+static gboolean
+expose_has_settable (JsonObject *expose)
+{
+    if (expose == NULL)
+        return FALSE;
+
+    if (json_object_has_member (expose, "access"))
+    {
+        JsonNode *n = json_object_get_member (expose, "access");
+        if (n != NULL && JSON_NODE_HOLDS_VALUE (n))
+        {
+            GType t = json_node_get_value_type (n);
+            if ((t == G_TYPE_INT64 || t == G_TYPE_DOUBLE) &&
+                (json_node_get_int (n) & 0x2) != 0)
+                return TRUE;
+        }
+    }
+
+    if (json_object_has_member (expose, "features"))
+    {
+        JsonNode *fn = json_object_get_member (expose, "features");
+        if (fn != NULL && JSON_NODE_HOLDS_ARRAY (fn))
+        {
+            JsonArray *fa = json_node_get_array (fn);
+            guint      m  = json_array_get_length (fa);
+            guint      i;
+            for (i = 0; i < m; i++)
+            {
+                JsonNode *e = json_array_get_element (fa, i);
+                if (e != NULL && JSON_NODE_HOLDS_OBJECT (e) &&
+                    expose_has_settable (json_node_get_object (e)))
+                    return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+/* One-word device class the combo maps to a type glyph.  Mirrors
+ * synthesize_category() in pn-zigbee-source.c (canonical expose type ->
+ * light / switch->plug-when-mains / lock / cover / fan / climate; else an
+ * `action` expose -> remote; else all-read-only -> sensor; else device), with
+ * two refinements matching the node set: the network Coordinator, and a
+ * water-leak sensor split out of the generic `sensor` bucket so it can show
+ * the water-drop glyph.  Never returns NULL (at worst "device"). */
+static const gchar *
+device_category (JsonObject *dev)
+{
+    JsonObject  *def;
+    JsonNode    *exposes_node;
+    JsonArray   *exposes;
+    const gchar *power_source;
+    const gchar *toptype;
+    gboolean     is_mains, has_action, has_leak, all_read_only;
+    guint        n, i;
+
+    toptype = peek_string (dev, "type");
+    if (toptype != NULL && g_strcmp0 (toptype, "Coordinator") == 0)
+        return "coordinator";
+
+    def = peek_object (dev, "definition");
+    if (def == NULL || !json_object_has_member (def, "exposes"))
+        return "device";
+    exposes_node = json_object_get_member (def, "exposes");
+    if (exposes_node == NULL || !JSON_NODE_HOLDS_ARRAY (exposes_node))
+        return "device";
+    exposes = json_node_get_array (exposes_node);
+    n       = json_array_get_length (exposes);
+    if (n == 0)
+        return "device";
+
+    power_source = peek_string (dev, "power_source");
+    is_mains     = (power_source != NULL &&
+                    g_str_has_prefix (power_source, "Mains"));
+    has_action    = FALSE;
+    has_leak      = FALSE;
+    all_read_only = TRUE;
+
+    for (i = 0; i < n; i++)
+    {
+        JsonNode    *elem = json_array_get_element (exposes, i);
+        JsonObject  *eo;
+        const gchar *type;
+        const gchar *prop;
+
+        if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
+            continue;
+        eo   = json_node_get_object (elem);
+        type = peek_string (eo, "type");
+
+        if (type != NULL)
+        {
+            if (g_strcmp0 (type, "light")   == 0) return "light";
+            if (g_strcmp0 (type, "switch")  == 0) return is_mains ? "plug" : "switch";
+            if (g_strcmp0 (type, "lock")    == 0) return "lock";
+            if (g_strcmp0 (type, "cover")   == 0) return "cover";
+            if (g_strcmp0 (type, "fan")     == 0) return "fan";
+            if (g_strcmp0 (type, "climate") == 0) return "climate";
+        }
+
+        prop = peek_string (eo, "property");
+        if (prop != NULL)
+        {
+            if (g_strcmp0 (prop, "action")     == 0) has_action = TRUE;
+            if (g_strcmp0 (prop, "water_leak") == 0) has_leak   = TRUE;
+        }
+
+        if (expose_has_settable (eo))
+            all_read_only = FALSE;
+    }
+
+    if (has_action)    return "remote";
+    if (has_leak)      return "leak";
+    if (all_read_only) return "sensor";
+    return "device";
+}
+
 void
 zb_name_registry_ingest_devices (JsonNode *payload)
 {
@@ -190,11 +334,12 @@ zb_name_registry_ingest_devices (JsonNode *payload)
     n = json_array_get_length (arr);
     for (i = 0; i < n; i++)
     {
-        JsonNode    *elem = json_array_get_element (arr, i);
-        JsonObject  *dev;
-        const gchar *fname;
-        const gchar *type;
-        const gchar *cur;
+        JsonNode     *elem = json_array_get_element (arr, i);
+        JsonObject   *dev;
+        const gchar  *fname;
+        const gchar  *type;
+        const gchar  *cat;
+        ZbDeviceInfo *info;
 
         if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
             continue;
@@ -202,23 +347,36 @@ zb_name_registry_ingest_devices (JsonNode *payload)
         fname = peek_string (dev, "friendly_name");
         if (fname == NULL || *fname == '\0')
             continue;
-        type = device_type (dev);   /* may be NULL */
+        type = device_type (dev);       /* may be NULL */
+        cat  = device_category (dev);    /* never NULL (>= "device") */
 
-        if (!g_hash_table_contains (self->devices, fname))
+        info = g_hash_table_lookup (self->devices, fname);
+        if (info == NULL)
         {
-            g_hash_table_insert (self->devices, g_strdup (fname),
-                                 g_strdup (type != NULL ? type : ""));
+            info           = g_new0 (ZbDeviceInfo, 1);
+            info->type     = g_strdup (type != NULL ? type : "");
+            info->category = g_strdup (cat);
+            g_hash_table_insert (self->devices, g_strdup (fname), info);
             changed = TRUE;
         }
         else
         {
-            /* Known name: only fill in a type we did not have yet, so a later
-             * fallback publish never clobbers a good description. */
-            cur = g_hash_table_lookup (self->devices, fname);
-            if ((cur == NULL || *cur == '\0') && type != NULL && *type != '\0')
+            /* Known name: only fill a field we did not have yet, so a later
+             * fallback publish (no definition) never clobbers a good
+             * description or a specific category with the "device" default. */
+            if ((info->type == NULL || *info->type == '\0') &&
+                type != NULL && *type != '\0')
             {
-                g_hash_table_insert (self->devices, g_strdup (fname),
-                                     g_strdup (type));
+                g_free (info->type);
+                info->type = g_strdup (type);
+                changed = TRUE;
+            }
+            if ((info->category == NULL || *info->category == '\0' ||
+                 g_strcmp0 (info->category, "device") == 0) &&
+                g_strcmp0 (cat, "device") != 0)
+            {
+                g_free (info->category);
+                info->category = g_strdup (cat);
                 changed = TRUE;
             }
         }
@@ -335,12 +493,26 @@ gchar *
 zb_name_registry_lookup_type (const gchar *name)
 {
     ZbNameRegistry *self = registry_get ();
-    const gchar    *type;
+    ZbDeviceInfo   *info;
 
     if (name == NULL)
         return NULL;
-    type = g_hash_table_lookup (self->devices, name);
-    return (type != NULL && *type != '\0') ? g_strdup (type) : NULL;
+    info = g_hash_table_lookup (self->devices, name);
+    return (info != NULL && info->type != NULL && *info->type != '\0')
+           ? g_strdup (info->type) : NULL;
+}
+
+gchar *
+zb_name_registry_lookup_category (const gchar *name)
+{
+    ZbNameRegistry *self = registry_get ();
+    ZbDeviceInfo   *info;
+
+    if (name == NULL)
+        return NULL;
+    info = g_hash_table_lookup (self->devices, name);
+    return (info != NULL && info->category != NULL && *info->category != '\0')
+           ? g_strdup (info->category) : NULL;
 }
 
 GObject *
