@@ -96,6 +96,53 @@ case_adds_names (void)
     CHECK (names_contains ("reg_plug"));
 }
 
+/* Each device's human-readable type is recorded: the nested
+ * definition.description, falling back to the top-level `type`. */
+static void
+case_records_type (void)
+{
+    gchar *t;
+
+    ingest ("[{\"friendly_name\":\"reg_leak\","
+            "  \"type\":\"EndDevice\","
+            "  \"definition\":{\"description\":\"Water leak detector\"}},"
+            " {\"friendly_name\":\"reg_coord\",\"type\":\"Coordinator\"}]");
+
+    t = zb_name_registry_lookup_type ("reg_leak");
+    CHECK_STR_EQ (t, "Water leak detector");     /* description wins */
+    g_free (t);
+
+    t = zb_name_registry_lookup_type ("reg_coord");
+    CHECK_STR_EQ (t, "Coordinator");             /* fallback to top type */
+    g_free (t);
+
+    CHECK_NULL (zb_name_registry_lookup_type ("reg_unknown_name"));
+}
+
+/* A name first seen without a type later gains one; a good description is
+ * never clobbered by a subsequent bare-fallback publish. */
+static void
+case_type_fill_and_keep (void)
+{
+    gchar *t;
+
+    ingest ("[{\"friendly_name\":\"reg_late\"}]");       /* no type yet */
+    CHECK_NULL (zb_name_registry_lookup_type ("reg_late"));
+
+    ingest ("[{\"friendly_name\":\"reg_late\","
+            "  \"definition\":{\"description\":\"Wireless button\"}}]");
+    t = zb_name_registry_lookup_type ("reg_late");
+    CHECK_STR_EQ (t, "Wireless button");
+    g_free (t);
+
+    /* A later publish carrying only the coarse top-level type must not
+     * overwrite the good description. */
+    ingest ("[{\"friendly_name\":\"reg_late\",\"type\":\"EndDevice\"}]");
+    t = zb_name_registry_lookup_type ("reg_late");
+    CHECK_STR_EQ (t, "Wireless button");
+    g_free (t);
+}
+
 /* Ingesting the same name twice keeps a single entry (set semantics). */
 static void
 case_dedups (void)
@@ -207,6 +254,8 @@ main (int argc, char **argv)
     t_init (&argc, &argv, "pn-zigbee-name-registry");
 
     t_add ("adds_names",             case_adds_names);
+    t_add ("records_type",           case_records_type);
+    t_add ("type_fill_and_keep",     case_type_fill_and_keep);
     t_add ("dedups",                 case_dedups);
     t_add ("merges_across_publishes",case_merges_across_publishes);
     t_add ("skips_unusable",         case_skips_unusable);

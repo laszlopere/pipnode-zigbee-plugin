@@ -52,9 +52,10 @@ struct _ZbNameRegistry
 {
     GObject     parent_instance;
 
-    /* Set of known friendly names: owned key -> NULL.  Merged across every
-     * broker, so a name is present iff at least one broker reports it. */
-    GHashTable *names;
+    /* Known devices: owned friendly-name key -> owned human-readable type
+     * value ("" when the type is not yet known).  Merged across every broker,
+     * so a name is present iff at least one broker reports it. */
+    GHashTable *devices;
 
     /* One hidden #PnMqtt source per broker profile, owned for the process
      * lifetime (the registry is never torn down). */
@@ -73,7 +74,7 @@ zb_name_registry_finalize (GObject *object)
 {
     ZbNameRegistry *self = ZB_NAME_REGISTRY (object);
 
-    g_clear_pointer (&self->names, g_hash_table_unref);
+    g_clear_pointer (&self->devices, g_hash_table_unref);
     g_clear_pointer (&self->sources, g_ptr_array_unref);
 
     G_OBJECT_CLASS (zb_name_registry_parent_class)->finalize (object);
@@ -96,8 +97,8 @@ zb_name_registry_class_init (ZbNameRegistryClass *klass)
 static void
 zb_name_registry_init (ZbNameRegistry *self)
 {
-    self->names   = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                           g_free, NULL);
+    self->devices = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                           g_free, g_free);
     self->sources = g_ptr_array_new_with_free_func (g_object_unref);
     self->started = FALSE;
 }
@@ -133,6 +134,37 @@ peek_string (JsonObject *obj, const gchar *key)
     return json_node_get_string (n);
 }
 
+/* Borrow an object-valued member off @obj, or NULL when absent / not an
+ * object. */
+static JsonObject *
+peek_object (JsonObject *obj, const gchar *key)
+{
+    JsonNode *n;
+
+    if (obj == NULL || !json_object_has_member (obj, key))
+        return NULL;
+    n = json_object_get_member (obj, key);
+    if (n == NULL || !JSON_NODE_HOLDS_OBJECT (n))
+        return NULL;
+    return json_node_get_object (n);
+}
+
+/* The human-readable type for a device object: the nested
+ * definition.description ("Water leak detector", "Security remote control"),
+ * falling back to the top-level `type` ("Coordinator" / "Router" /
+ * "EndDevice") when there is no definition.  Returns a borrowed string (valid
+ * while @dev lives) or NULL when neither is present. */
+static const gchar *
+device_type (JsonObject *dev)
+{
+    JsonObject  *def  = peek_object (dev, "definition");
+    const gchar *desc = peek_string (def, "description");
+
+    if (desc != NULL && *desc != '\0')
+        return desc;
+    return peek_string (dev, "type");
+}
+
 void
 zb_name_registry_ingest_devices (JsonNode *payload)
 {
@@ -161,6 +193,8 @@ zb_name_registry_ingest_devices (JsonNode *payload)
         JsonNode    *elem = json_array_get_element (arr, i);
         JsonObject  *dev;
         const gchar *fname;
+        const gchar *type;
+        const gchar *cur;
 
         if (elem == NULL || !JSON_NODE_HOLDS_OBJECT (elem))
             continue;
@@ -168,11 +202,25 @@ zb_name_registry_ingest_devices (JsonNode *payload)
         fname = peek_string (dev, "friendly_name");
         if (fname == NULL || *fname == '\0')
             continue;
+        type = device_type (dev);   /* may be NULL */
 
-        if (!g_hash_table_contains (self->names, fname))
+        if (!g_hash_table_contains (self->devices, fname))
         {
-            g_hash_table_add (self->names, g_strdup (fname));
+            g_hash_table_insert (self->devices, g_strdup (fname),
+                                 g_strdup (type != NULL ? type : ""));
             changed = TRUE;
+        }
+        else
+        {
+            /* Known name: only fill in a type we did not have yet, so a later
+             * fallback publish never clobbers a good description. */
+            cur = g_hash_table_lookup (self->devices, fname);
+            if ((cur == NULL || *cur == '\0') && type != NULL && *type != '\0')
+            {
+                g_hash_table_insert (self->devices, g_strdup (fname),
+                                     g_strdup (type));
+                changed = TRUE;
+            }
         }
     }
 
@@ -275,12 +323,24 @@ zb_name_registry_get_names (void)
     GHashTableIter  iter;
     gpointer        key;
 
-    g_hash_table_iter_init (&iter, self->names);
+    g_hash_table_iter_init (&iter, self->devices);
     while (g_hash_table_iter_next (&iter, &key, NULL))
         g_ptr_array_add (out, g_strdup (key));
 
     g_ptr_array_sort (out, cmp_names);
     return out;
+}
+
+gchar *
+zb_name_registry_lookup_type (const gchar *name)
+{
+    ZbNameRegistry *self = registry_get ();
+    const gchar    *type;
+
+    if (name == NULL)
+        return NULL;
+    type = g_hash_table_lookup (self->devices, name);
+    return (type != NULL && *type != '\0') ? g_strdup (type) : NULL;
 }
 
 GObject *

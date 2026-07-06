@@ -61,11 +61,15 @@ void zb_name_registry_start (void);
  * @payload: a `zigbee2mqtt/bridge/devices` message payload -- expected to be
  *           a #JsonNode holding an array of device objects
  *
- * Merge the `friendly_name` of every device in @payload into the known-name
- * set, emitting "changed" (see zb_name_registry_get_object()) if the set
- * grew.  A @payload that is %NULL or not an array is ignored, so a malformed
- * publish never blanks a good set.  Called from the hidden sources' message
- * handler; exposed so the ingest logic can be exercised network-free.
+ * Merge every device in @payload into the known set, recording each device's
+ * `friendly_name` and a human-readable type -- the nested
+ * `definition.description` ("Water leak detector", "Security remote control",
+ * ...), falling back to the top-level `type` ("Coordinator") when there is no
+ * definition.  Emits "changed" (see zb_name_registry_get_object()) if a name
+ * was added or first gained a type.  A @payload that is %NULL or not an array
+ * is ignored, so a malformed publish never blanks a good set.  Called from the
+ * hidden sources' message handler; exposed so the ingest logic can be
+ * exercised network-free.
  */
 void zb_name_registry_ingest_devices (JsonNode *payload);
 
@@ -79,6 +83,18 @@ void zb_name_registry_ingest_devices (JsonNode *payload);
  *   (never %NULL; may be empty).  Free with g_ptr_array_unref().
  */
 GPtrArray *zb_name_registry_get_names (void);
+
+/**
+ * zb_name_registry_get_type:
+ * @name: a friendly name (typically one returned by zb_name_registry_get_names())
+ *
+ * The human-readable device type recorded for @name -- the second, dimmer
+ * line of the combo dropdown.
+ *
+ * Returns: (transfer full) (nullable): a newly-allocated type string, or %NULL
+ *   when @name is unknown or has no type.  Free with g_free().
+ */
+gchar *zb_name_registry_lookup_type (const gchar *name);
 
 /**
  * zb_name_registry_get_object:

@@ -31,31 +31,82 @@
 
 /* ------------------------------------------------------------------ */
 /*  The editable friendly-name combo editor                            */
+/*                                                                     */
+/*  A GtkComboBox with an entry, backed by a two-column list store      */
+/*  (friendly name, human-readable type).  The entry -- and thus the    */
+/*  stored property value -- is just the friendly name; the dropdown    */
+/*  rows render two lines via a custom cell data func: the name in the  */
+/*  normal foreground, the type below it in a smaller, dimmer grey.     */
 /* ------------------------------------------------------------------ */
 
-/* Fill @combo's dropdown from the current name set, leaving the entry text
- * (the bound property value) untouched -- gtk_combo_box_text_remove_all()
- * clears only the model rows of a with-entry combo, not the entry. */
+enum { COL_NAME, COL_TYPE, N_COLS };
+
+/* Fill @store from the current registry snapshot: one row per name, with its
+ * recorded type (or empty).  Clearing + refilling the store leaves the combo's
+ * entry text (the bound property value) untouched. */
 static void
-populate_combo (GtkComboBoxText *combo)
+fill_store (GtkListStore *store)
 {
     GPtrArray *names = zb_name_registry_get_names ();
     guint      i;
 
-    gtk_combo_box_text_remove_all (combo);
+    gtk_list_store_clear (store);
     for (i = 0; i < names->len; i++)
-        gtk_combo_box_text_append_text (combo,
-                                        g_ptr_array_index (names, i));
+    {
+        const gchar *name = g_ptr_array_index (names, i);
+        gchar       *type = zb_name_registry_lookup_type (name);
 
+        gtk_list_store_insert_with_values (store, NULL, -1,
+                                           COL_NAME, name,
+                                           COL_TYPE, type != NULL ? type : "",
+                                           -1);
+        g_free (type);
+    }
     g_ptr_array_unref (names);
+}
+
+/* Render a dropdown row on two lines: the friendly name normally, the type
+ * beneath it smaller and grey.  A device with no known type shows just the
+ * name (no dangling blank second line). */
+static void
+row_cell_data (GtkCellLayout   *layout,
+               GtkCellRenderer *cell,
+               GtkTreeModel    *model,
+               GtkTreeIter     *iter,
+               gpointer         user_data)
+{
+    gchar *name = NULL;
+    gchar *type = NULL;
+    gchar *markup;
+
+    (void) layout;
+    (void) user_data;
+
+    gtk_tree_model_get (model, iter, COL_NAME, &name, COL_TYPE, &type, -1);
+
+    if (type != NULL && *type != '\0')
+        markup = g_markup_printf_escaped (
+                "%s\n<small><span foreground=\"#888888\">%s</span></small>",
+                name != NULL ? name : "", type);
+    else
+        markup = g_markup_printf_escaped ("%s", name != NULL ? name : "");
+
+    g_object_set (cell, "markup", markup, NULL);
+
+    g_free (markup);
+    g_free (name);
+    g_free (type);
 }
 
 /* Registry "changed" -> refresh the dropdown of a combo still on screen. */
 static void
 on_registry_changed (GObject *registry, gpointer combo)
 {
+    GtkTreeModel *model = gtk_combo_box_get_model (GTK_COMBO_BOX (combo));
+
     (void) registry;
-    populate_combo (GTK_COMBO_BOX_TEXT (combo));
+    if (GTK_IS_LIST_STORE (model))
+        fill_store (GTK_LIST_STORE (model));
 }
 
 /* Coalesce a NULL friendly-name (freshly-dropped, unconfigured node) to the
@@ -86,8 +137,10 @@ friendly_name_editor (PnNode     *self,
                       GObject    *target,
                       GtkWindow  *dialog_parent)
 {
-    GtkWidget *combo;
-    GtkWidget *entry;
+    GtkListStore    *store;
+    GtkWidget       *combo;
+    GtkWidget       *entry;
+    GtkCellRenderer *cell;
 
     (void) self;
     (void) dialog_parent;
@@ -95,16 +148,32 @@ friendly_name_editor (PnNode     *self,
     if (g_strcmp0 (pspec->name, "friendly-name") != 0)
         return NULL;
 
-    combo = gtk_combo_box_text_new_with_entry ();
+    store = gtk_list_store_new (N_COLS, G_TYPE_STRING, G_TYPE_STRING);
+    combo = gtk_combo_box_new_with_model_and_entry (GTK_TREE_MODEL (store));
+    g_object_unref (store);   /* combo now holds the only ref */
+
+    /* The entry -- and thus the stored property value -- is the friendly
+     * name column; the type column is display-only, shown by the cell data
+     * func below. */
+    gtk_combo_box_set_entry_text_column (GTK_COMBO_BOX (combo), COL_NAME);
     entry = gtk_bin_get_child (GTK_BIN (combo));
 
-    populate_combo (GTK_COMBO_BOX_TEXT (combo));
+    /* Own the popup rendering: clear any default renderer, then install one
+     * text cell driven by row_cell_data() for the two-line name/type look. */
+    gtk_cell_layout_clear (GTK_CELL_LAYOUT (combo));
+    cell = gtk_cell_renderer_text_new ();
+    g_object_set (cell, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
+    gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo), cell, TRUE);
+    gtk_cell_layout_set_cell_data_func (GTK_CELL_LAYOUT (combo), cell,
+                                        row_cell_data, NULL, NULL);
+
+    fill_store (store);
 
     /* Bidirectional bind entry <-> node property; SYNC_CREATE seeds the
      * field from the node's current value.  Selecting a dropdown row sets
-     * the entry text (native with-entry behaviour), which flows to the
-     * property through this binding; typing a name not in the list works
-     * exactly as the old plain entry did. */
+     * the entry text (the name column) which flows to the property through
+     * this binding; typing a name not in the list works exactly as the old
+     * plain entry did. */
     g_object_bind_property_full (target, "friendly-name", entry, "text",
                                  G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
                                  name_to_entry, NULL, NULL, NULL);
